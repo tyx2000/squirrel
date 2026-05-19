@@ -15,6 +15,7 @@ final class HotKeyManager: ObservableObject {
     private var isSuspended = false
     private var lastPerformedCommand: HotKeyCommand?
     private var lastPerformedAt = Date.distantPast
+    private var eventHandlerRef: EventHandlerRef?
 
     private static var activeManager: HotKeyManager?
     private static let signature = OSType(0x5351524C)
@@ -29,6 +30,9 @@ final class HotKeyManager: ObservableObject {
 
     deinit {
         unregisterAll()
+        if let eventHandlerRef {
+            RemoveEventHandler(eventHandlerRef)
+        }
     }
 
     func setAction(_ command: HotKeyCommand, action: @escaping () -> Void) {
@@ -55,6 +59,10 @@ final class HotKeyManager: ObservableObject {
     func resumeHotKeys() {
         isSuspended = false
         registerAll()
+    }
+
+    func reportActionFailure(_ message: String) {
+        lastEventMessage = message
     }
 
     private func perform(commandID: UInt32) {
@@ -116,13 +124,14 @@ final class HotKeyManager: ObservableObject {
 
     private func installEventHandlerIfNeeded() {
         Self.activeManager = self
+        guard eventHandlerRef == nil else { return }
 
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
         )
 
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+        let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
             guard let event else { return OSStatus(eventNotHandledErr) }
 
             var hotKeyID = EventHotKeyID()
@@ -142,7 +151,10 @@ final class HotKeyManager: ObservableObject {
 
             HotKeyManager.activeManager?.perform(commandID: hotKeyID.id)
             return noErr
-        }, 1, &eventType, nil, nil)
+        }, 1, &eventType, nil, &eventHandlerRef)
+        if status != noErr {
+            registrationError = "Shortcut event handler installation failed (\(status))."
+        }
     }
 
     private func saveShortcuts() {

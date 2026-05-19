@@ -143,13 +143,15 @@ final class WindowManager: ObservableObject {
     private func focusedWindow(in appElement: AXUIElement) -> AXUIElement? {
         var focused: CFTypeRef?
         if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focused) == .success,
-           let focused {
+           let focused,
+           CFGetTypeID(focused) == AXUIElementGetTypeID() {
             return (focused as! AXUIElement)
         }
 
         var main: CFTypeRef?
         if AXUIElementCopyAttributeValue(appElement, kAXMainWindowAttribute as CFString, &main) == .success,
-           let main {
+           let main,
+           CFGetTypeID(main) == AXUIElementGetTypeID() {
             return (main as! AXUIElement)
         }
 
@@ -192,8 +194,15 @@ final class WindowManager: ObservableObject {
 
         var position = CGPoint.zero
         var size = CGSize.zero
-        AXValueGetValue(positionValue as! AXValue, .cgPoint, &position)
-        AXValueGetValue(sizeValue as! AXValue, .cgSize, &size)
+        guard CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
+            return nil
+        }
+
+        guard AXValueGetValue(positionValue as! AXValue, .cgPoint, &position),
+              AXValueGetValue(sizeValue as! AXValue, .cgSize, &size) else {
+            return nil
+        }
         return CGRect(origin: position, size: size)
     }
 

@@ -38,19 +38,21 @@ final class AppServices: ObservableObject {
             windowManager.apply(.centerHalf)
         }
 
-        hotKeyManager.setAction(.lockScreen) {
-            Self.lockScreen()
+        hotKeyManager.setAction(.lockScreen) { [hotKeyManager] in
+            if !Self.lockScreen() {
+                hotKeyManager.reportActionFailure("Lock Screen shortcut was triggered, but macOS did not accept the lock request.")
+            }
         }
 
         MainWindowPresenter.shared.configure(services: self)
     }
 
-    private static func lockScreen() {
+    private static func lockScreen() -> Bool {
         if launchCGSessionLock() {
-            return
+            return true
         }
 
-        postSystemLockShortcut()
+        return postSystemLockShortcut()
     }
 
     private static func launchCGSessionLock() -> Bool {
@@ -74,17 +76,21 @@ final class AppServices: ObservableObject {
         }
     }
 
-    private static func postSystemLockShortcut() {
+    private static func postSystemLockShortcut() -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
         let flags: CGEventFlags = [.maskControl, .maskCommand]
         let keyCode = CGKeyCode(kVK_ANSI_Q)
 
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)
-        keyDown?.flags = flags
-        keyDown?.post(tap: .cghidEventTap)
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
+            return false
+        }
 
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
-        keyUp?.flags = flags
-        keyUp?.post(tap: .cghidEventTap)
+        keyDown.flags = flags
+        keyDown.post(tap: .cghidEventTap)
+
+        keyUp.flags = flags
+        keyUp.post(tap: .cghidEventTap)
+        return true
     }
 }

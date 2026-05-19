@@ -134,9 +134,9 @@ struct ContentView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        ForEach(items) { item in
                             row(item)
-                            if index < items.count - 1 {
+                            if item.id != items.last?.id {
                                 Rectangle()
                                     .fill(AppPalette.separator)
                                     .frame(height: 1)
