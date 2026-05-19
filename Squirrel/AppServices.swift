@@ -9,6 +9,7 @@ final class AppServices: ObservableObject {
     let hotKeyManager: HotKeyManager
     let windowManager: WindowManager
     let statusItemController: StatusItemController
+    private var latestLockScreenRequestID = UUID()
 
     init() {
         clipboardStore = ClipboardHistoryStore()
@@ -38,16 +39,33 @@ final class AppServices: ObservableObject {
             windowManager.apply(.centerHalf)
         }
 
-        hotKeyManager.setAction(.lockScreen) { [hotKeyManager] in
-            if !Self.lockScreen() {
-                hotKeyManager.reportActionFailure("Lock Screen shortcut was triggered, but macOS did not accept the lock request.")
+        hotKeyManager.setAction(.lockScreen) { [weak self, weak hotKeyManager] in
+            let requestID = UUID()
+            self?.latestLockScreenRequestID = requestID
+            Self.lockScreen { didLock in
+                guard self?.latestLockScreenRequestID == requestID else { return }
+                if !didLock {
+                    hotKeyManager?.reportActionFailure(
+                        "Lock Screen shortcut was triggered, but macOS did not accept the lock request.",
+                        for: .lockScreen
+                    )
+                }
             }
         }
 
         MainWindowPresenter.shared.configure(services: self)
     }
 
-    private static func lockScreen() -> Bool {
+    private static func lockScreen(completion: @escaping (Bool) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let didLock = performLockScreenRequest()
+            DispatchQueue.main.async {
+                completion(didLock)
+            }
+        }
+    }
+
+    private nonisolated static func performLockScreenRequest() -> Bool {
         if launchCGSessionLock() {
             return true
         }
@@ -55,7 +73,7 @@ final class AppServices: ObservableObject {
         return postSystemLockShortcut()
     }
 
-    private static func launchCGSessionLock() -> Bool {
+    private nonisolated static func launchCGSessionLock() -> Bool {
         let candidatePaths = [
             "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession",
             "/System/Library/CoreServices/CGSession"
@@ -70,13 +88,21 @@ final class AppServices: ObservableObject {
         process.arguments = ["-suspend"]
         do {
             try process.run()
-            return true
+            let deadline = Date().addingTimeInterval(1.5)
+            while process.isRunning && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+            if process.isRunning {
+                process.terminate()
+                return false
+            }
+            return process.terminationStatus == 0
         } catch {
             return false
         }
     }
 
-    private static func postSystemLockShortcut() -> Bool {
+    private nonisolated static func postSystemLockShortcut() -> Bool {
         let source = CGEventSource(stateID: .hidSystemState)
         let flags: CGEventFlags = [.maskControl, .maskCommand]
         let keyCode = CGKeyCode(kVK_ANSI_Q)

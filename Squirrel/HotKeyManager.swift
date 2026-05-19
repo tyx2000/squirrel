@@ -17,7 +17,7 @@ final class HotKeyManager: ObservableObject {
     private var lastPerformedAt = Date.distantPast
     private var eventHandlerRef: EventHandlerRef?
 
-    private static var activeManager: HotKeyManager?
+    private static weak var activeManager: HotKeyManager?
     private static let signature = OSType(0x5351524C)
     private static let defaultsKey = "Squirrel.Shortcuts"
     private static let duplicateEventInterval: TimeInterval = 0.18
@@ -61,7 +61,10 @@ final class HotKeyManager: ObservableObject {
         registerAll()
     }
 
-    func reportActionFailure(_ message: String) {
+    func reportActionFailure(_ message: String, for command: HotKeyCommand? = nil) {
+        if let command, lastPerformedCommand != command {
+            return
+        }
         lastEventMessage = message
     }
 
