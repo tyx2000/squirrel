@@ -4,7 +4,7 @@
 //
 //  Created by EAdib on 2026/5/18.
 //
-// Purpose: Verifies clipboard history storage, pruning, copy promotion, pasteboard clearing, and image files.
+// Purpose: Verifies clipboard history storage, bounded retention, copy promotion, pasteboard clearing, and image files.
 
 import AppKit
 import Foundation
@@ -27,12 +27,22 @@ struct SquirrelTests {
         #expect(store.items.first?.createdAt == secondDate)
     }
 
-    @Test func clipboardHistoryPrunesOlderThanRetentionWindow() async throws {
+    @Test func clipboardHistoryKeepsOnlyMostRecentItemsWithinLimit() async throws {
+        let store = ClipboardHistoryStore(storageURL: nil, maxItemCount: 2)
+
+        store.addText("old", at: Date(timeIntervalSince1970: 0))
+        store.addText("middle", at: Date(timeIntervalSince1970: 10))
+        store.addText("new", at: Date(timeIntervalSince1970: 20))
+
+        #expect(store.items.map(\.text) == ["new", "middle"])
+    }
+
+    @Test func clipboardHistoryRemovesItemsOlderThanRetentionWindow() async throws {
         let store = ClipboardHistoryStore(storageURL: nil, retentionInterval: 10)
 
         store.addText("old", at: Date(timeIntervalSince1970: 0))
         store.addText("new", at: Date(timeIntervalSince1970: 20))
-        store.pruneExpired(now: Date(timeIntervalSince1970: 20))
+        store.pruneHistory(now: Date(timeIntervalSince1970: 20))
 
         #expect(store.items.map(\.text) == ["new"])
     }

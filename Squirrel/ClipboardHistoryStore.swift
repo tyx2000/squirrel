@@ -1,4 +1,4 @@
-// Purpose: Monitors the pasteboard, stores 24-hour clipboard history, and manages image persistence.
+// Purpose: Monitors the pasteboard, stores bounded clipboard history, and manages image persistence.
 
 import AppKit
 import Combine
@@ -11,15 +11,15 @@ final class ClipboardHistoryStore: ObservableObject {
     private let pasteboard: NSPasteboard
     private let storageURL: URL?
     private let imageDirectoryURL: URL?
+    private let maxItemCount: Int
     private let retentionInterval: TimeInterval
     private var timer: Timer?
     private var lastChangeCount: Int
-    private var lastPruneAt = Date.distantPast
-    private let idlePruneInterval: TimeInterval = 5 * 60
 
     init(
         pasteboard: NSPasteboard = .general,
         storageURL: URL? = ClipboardHistoryStore.defaultStorageURL,
+        maxItemCount: Int = 50,
         retentionInterval: TimeInterval = 24 * 60 * 60
     ) {
         self.pasteboard = pasteboard
@@ -27,10 +27,11 @@ final class ClipboardHistoryStore: ObservableObject {
         self.imageDirectoryURL = storageURL?
             .deletingLastPathComponent()
             .appendingPathComponent("ClipboardImages", isDirectory: true)
-        self.retentionInterval = retentionInterval
+        self.maxItemCount = max(1, maxItemCount)
+        self.retentionInterval = max(0, retentionInterval)
         self.lastChangeCount = pasteboard.changeCount
         load()
-        pruneExpired()
+        pruneHistory()
     }
 
     deinit {
@@ -47,10 +48,7 @@ final class ClipboardHistoryStore: ObservableObject {
 
     func pollPasteboard(now: Date = Date()) {
         let changeCount = pasteboard.changeCount
-        guard changeCount != lastChangeCount else {
-            pruneExpiredIfNeeded(now: now)
-            return
-        }
+        guard changeCount != lastChangeCount else { return }
 
         lastChangeCount = changeCount
         let sourceApplicationName = currentSourceApplicationName()
@@ -59,7 +57,7 @@ final class ClipboardHistoryStore: ObservableObject {
         } else if let text = pasteboard.string(forType: .string) {
             addText(text, sourceApplicationName: sourceApplicationName, at: now)
         } else {
-            pruneExpired(now: now)
+            pruneHistory(now: now)
         }
     }
 
@@ -69,7 +67,7 @@ final class ClipboardHistoryStore: ObservableObject {
 
         items.removeAll { $0.text == text }
         items.insert(ClipboardItem(text: text, sourceApplicationName: sourceApplicationName, createdAt: date), at: 0)
-        pruneExpired(now: date)
+        pruneHistory(now: date)
         save()
     }
 
@@ -93,7 +91,7 @@ final class ClipboardHistoryStore: ObservableObject {
             ),
             at: 0
         )
-        pruneExpired(now: date)
+        pruneHistory(now: date)
         save()
     }
 
@@ -170,21 +168,20 @@ final class ClipboardHistoryStore: ObservableObject {
         lastChangeCount = pasteboard.changeCount
     }
 
-    func pruneExpired(now: Date = Date()) {
-        lastPruneAt = now
+    func pruneHistory(now: Date = Date()) {
         let cutoff = now.addingTimeInterval(-retentionInterval)
-        let oldCount = items.count
-        let expiredItems = items.filter { $0.createdAt < cutoff }
-        items.removeAll { $0.createdAt < cutoff }
-        if items.count != oldCount {
-            deleteImageFiles(for: expiredItems)
-            save()
+        var retainedItems = items.filter { $0.createdAt >= cutoff }
+        if retainedItems.count > maxItemCount {
+            retainedItems = Array(retainedItems.prefix(maxItemCount))
         }
-    }
 
-    private func pruneExpiredIfNeeded(now: Date) {
-        guard now.timeIntervalSince(lastPruneAt) >= idlePruneInterval else { return }
-        pruneExpired(now: now)
+        guard retainedItems.map(\.id) != items.map(\.id) else { return }
+
+        let retainedIDs = Set(retainedItems.map(\.id))
+        let removedItems = items.filter { !retainedIDs.contains($0.id) }
+        items = retainedItems
+        deleteImageFiles(for: removedItems)
+        save()
     }
 
     private func load() {

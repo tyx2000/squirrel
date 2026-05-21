@@ -15,14 +15,13 @@ final class StatusItemController: NSObject {
         super.init()
 
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "squirrel", accessibilityDescription: "Squirrel")
-                ?? NSImage(systemSymbolName: "hare", accessibilityDescription: "Squirrel")
-                ?? NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Squirrel")
+            let image = NSImage(systemSymbolName: "apple.logo", accessibilityDescription: "Fruit")
+                ?? NSImage(systemSymbolName: "leaf", accessibilityDescription: "Fruit")
             if let image {
                 image.isTemplate = true
                 button.image = image
             } else {
-                button.title = "S"
+                button.title = "F"
             }
             button.target = self
             button.action = #selector(handleStatusItemClick(_:))
