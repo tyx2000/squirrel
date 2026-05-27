@@ -13,6 +13,7 @@ final class MainWindowPresenter {
     private let windowDelegate = MainWindowDelegate()
     private var shouldShowWhenAvailable = false
     private var isHiding = false
+    private var pendingClipboardPromotion: ClipboardItem?
     private let animationDuration: TimeInterval = 0.16
     private let windowSize = NSSize(width: 720, height: 480)
 
@@ -73,6 +74,22 @@ final class MainWindowPresenter {
         }
     }
 
+    func promoteClipboardItemAfterNextHide(_ item: ClipboardItem) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.promoteClipboardItemAfterNextHide(item)
+            }
+            return
+        }
+
+        guard let window, window.isVisible else {
+            services?.clipboardStore.promoteItem(item)
+            return
+        }
+
+        pendingClipboardPromotion = item
+    }
+
     func hideClipboardWindow(_ window: NSWindow? = nil) {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
@@ -103,7 +120,14 @@ final class MainWindowPresenter {
                 self.window = nil
             }
             self.isHiding = false
+            self.promotePendingClipboardItem()
         }
+    }
+
+    private func promotePendingClipboardItem() {
+        guard let pendingClipboardPromotion else { return }
+        self.pendingClipboardPromotion = nil
+        services?.clipboardStore.promoteItem(pendingClipboardPromotion)
     }
 
     private func makeWindow() -> NSWindow? {

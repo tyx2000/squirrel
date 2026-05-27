@@ -16,9 +16,9 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
     var title: String {
         switch self {
         case .clipboardWindow: "Show Clipboard History"
-        case .leftHalf: "Window Left Half"
-        case .rightHalf: "Window Right Half"
-        case .centerHalf: "Window Center Half"
+        case .leftHalf: "Window Left Two Thirds"
+        case .rightHalf: "Window Right Two Thirds"
+        case .centerHalf: "Window Center Two Thirds"
         case .lockScreen: "Lock Screen"
         }
     }

@@ -61,6 +61,21 @@ struct SquirrelTests {
         #expect(pasteboard.string(forType: .string) == "first")
     }
 
+    @Test func copyingHistoryItemDoesNotPromoteItImmediately() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)
+
+        store.addText("first", at: Date(timeIntervalSince1970: 100))
+        store.addText("second", at: Date(timeIntervalSince1970: 200))
+        let item = try #require(store.items.last)
+
+        let didCopy = store.copyToPasteboard(item)
+
+        #expect(didCopy)
+        #expect(store.items.map(\.text) == ["second", "first"])
+        #expect(pasteboard.string(forType: .string) == "first")
+    }
+
     @Test func clipboardHistoryStoresImageData() async throws {
         let store = ClipboardHistoryStore(storageURL: nil)
         let imageData = try #require(Self.testImageData())
@@ -123,6 +138,40 @@ struct SquirrelTests {
         store.addText("from xcode", sourceApplicationName: "Xcode", at: Date(timeIntervalSince1970: 100))
 
         #expect(store.items.first?.sourceApplicationName == "Xcode")
+    }
+
+    @Test func clipboardHistoryRejectsTextLargerThanByteLimit() async throws {
+        let store = ClipboardHistoryStore(storageURL: nil)
+        let oversizedText = String(repeating: "😀", count: 25_001)
+
+        store.addText(oversizedText, at: Date(timeIntervalSince1970: 100))
+
+        #expect(store.items.isEmpty)
+        #expect(store.lastError == "Clipboard text too large (max 100KB)")
+    }
+
+    @Test func clipboardHistoryRejectsStoredTextLargerThanByteLimitAfterTrimming() async throws {
+        let store = ClipboardHistoryStore(storageURL: nil)
+        let oversizedText = String(repeating: " ", count: 100_001) + "x"
+
+        store.addText(oversizedText, at: Date(timeIntervalSince1970: 100))
+
+        #expect(store.items.isEmpty)
+        #expect(store.lastError == "Clipboard text too large (max 100KB)")
+    }
+
+    @Test func windowLayoutUsesTwoThirdsWidthForShortcutModes() async throws {
+        let visibleFrame = CGRect(x: 10, y: 20, width: 900, height: 600)
+
+        #expect(WindowLayoutCalculator.targetFrame(for: .leftHalf, in: visibleFrame) == CGRect(x: 10, y: 20, width: 600, height: 600))
+        #expect(WindowLayoutCalculator.targetFrame(for: .rightHalf, in: visibleFrame) == CGRect(x: 310, y: 20, width: 600, height: 600))
+        #expect(WindowLayoutCalculator.targetFrame(for: .centerHalf, in: visibleFrame) == CGRect(x: 160, y: 20, width: 600, height: 600))
+    }
+
+    @Test func windowLayoutFloorsFractionalTwoThirdsWidth() async throws {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1000, height: 500)
+
+        #expect(WindowLayoutCalculator.targetFrame(for: .leftHalf, in: visibleFrame).width == 666)
     }
 
     @Test func copyingImageItemPromotesItAndWritesPasteboardImage() async throws {

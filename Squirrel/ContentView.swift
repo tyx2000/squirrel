@@ -49,6 +49,12 @@ private enum ClipboardLayout {
     static let columnSpacing: CGFloat = 12
     static let cardSpacing: CGFloat = 12
     static let cardMaxHeight: CGFloat = 150
+    static let thumbnailCacheLimit = 50 * 1024 * 1024
+
+    static func configureThumbnailCache() {
+        let cache = ClipboardImagePreview.getThumbnailCache()
+        cache.totalCostLimit = thumbnailCacheLimit
+    }
 }
 
 struct ContentView: View {
@@ -60,6 +66,25 @@ struct ContentView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let error = clipboardStore.lastError {
+                HStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.orange)
+                    Text(error)
+                        .font(.caption)
+                        .lineLimit(2)
+                    Spacer()
+                    Button(action: { clipboardStore.clearError() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.1))
+                .frame(height: 40)
+            }
             tabBar
             Rectangle()
                 .fill(AppPalette.separator)
@@ -72,6 +97,9 @@ struct ContentView: View {
             withAnimation(.easeInOut(duration: 0.18)) {
                 selectedTab = .history
             }
+        }
+        .onAppear {
+            ClipboardLayout.configureThumbnailCache()
         }
     }
 
@@ -122,7 +150,13 @@ struct ContentView: View {
                     item: item,
                     imageURLProvider: { clipboardStore.imageURL(for: item) },
                     imageDataProvider: { clipboardStore.imageData(for: item) },
-                    onCopy: { clipboardStore.copyToPasteboardAndPromote(item) },
+                    onCopy: {
+                        clipboardStore.copyToPasteboard(item)
+                        MainWindowPresenter.shared.hideClipboardWindow()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            clipboardStore.promoteItem(item)
+                        }
+                    },
                     onDelete: { clipboardStore.delete(item) }
                 )
             }
@@ -342,6 +376,12 @@ private struct ClipboardImagePreview: View {
     let imageDataProvider: () -> Data?
     @State private var thumbnail: NSImage?
 
+    private static let thumbnailCache = NSCache<NSString, NSImage>()
+
+    static func getThumbnailCache() -> NSCache<NSString, NSImage> {
+        return thumbnailCache
+    }
+
     var body: some View {
         Group {
             if let thumbnail {
@@ -367,16 +407,26 @@ private struct ClipboardImagePreview: View {
     }
 
     private func makeThumbnail() -> NSImage? {
+        let cacheKey = imageID.uuidString as NSString
+
+        if let cached = Self.thumbnailCache.object(forKey: cacheKey) {
+            return cached
+        }
+
+        var result: NSImage? = nil
+
         if let imageURL = imageURLProvider(),
            let thumbnail = ClipboardImageThumbnail.make(from: imageURL) {
-            return thumbnail
+            result = thumbnail
+        } else if let imageData = imageDataProvider() {
+            result = ClipboardImageThumbnail.make(from: imageData)
         }
 
-        if let imageData = imageDataProvider() {
-            return ClipboardImageThumbnail.make(from: imageData)
+        if let result {
+            Self.thumbnailCache.setObject(result, forKey: cacheKey)
         }
 
-        return nil
+        return result
     }
 }
 

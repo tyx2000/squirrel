@@ -4,9 +4,12 @@ import AppKit
 import Combine
 import CryptoKit
 import Foundation
+import os.log
 
+@MainActor
 final class ClipboardHistoryStore: ObservableObject {
     @Published private(set) var items: [ClipboardItem] = []
+    @Published private(set) var lastError: String?
 
     private let pasteboard: NSPasteboard
     private let storageURL: URL?
@@ -40,13 +43,32 @@ final class ClipboardHistoryStore: ObservableObject {
 
     func startMonitoring() {
         guard timer == nil else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.75, repeats: true) { [weak self] _ in
-            self?.pollPasteboard()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let store = self else { return }
+            Task { @MainActor in
+                store.pollPasteboard()
+            }
         }
         RunLoop.main.add(timer!, forMode: .common)
     }
 
+    func stopMonitoring() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    func clearError() {
+        lastError = nil
+    }
+
     func pollPasteboard(now: Date = Date()) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.pollPasteboard(now: now)
+            }
+            return
+        }
+
         let changeCount = pasteboard.changeCount
         guard changeCount != lastChangeCount else { return }
 
@@ -64,6 +86,10 @@ final class ClipboardHistoryStore: ObservableObject {
     func addText(_ text: String, sourceApplicationName: String? = nil, at date: Date = Date()) {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return }
+        guard normalized.count <= 100_000 else {
+            lastError = "Clipboard text too large (max 100KB)"
+            return
+        }
 
         items.removeAll { $0.text == text }
         items.insert(ClipboardItem(text: text, sourceApplicationName: sourceApplicationName, createdAt: date), at: 0)
@@ -73,6 +99,10 @@ final class ClipboardHistoryStore: ObservableObject {
 
     func addImageData(_ imageData: Data, sourceApplicationName: String? = nil, at date: Date = Date()) {
         guard !imageData.isEmpty else { return }
+        guard imageData.count <= 50_000_000 else {
+            lastError = "Image too large (max 50MB)"
+            return
+        }
 
         removeImageItemsMatching(imageData)
 
@@ -124,7 +154,29 @@ final class ClipboardHistoryStore: ObservableObject {
         return imageDirectoryURL.appendingPathComponent(imageFileName)
     }
 
+    func copyToPasteboard(_ item: ClipboardItem) {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+        let itemToCopy = items[index]
+
+        if itemToCopy.isImage {
+            if let imageData = imageData(for: itemToCopy) {
+                setPasteboardImageData(imageData)
+            }
+            return
+        }
+
+        let normalized = itemToCopy.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else { return }
+
+        setPasteboardText(itemToCopy.text)
+    }
+
     func copyToPasteboardAndPromote(_ item: ClipboardItem) {
+        copyToPasteboard(item)
+        promoteItem(item)
+    }
+
+    func promoteItem(_ item: ClipboardItem) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
         var promotedItem = items.remove(at: index)
         let now = Date()
@@ -136,9 +188,6 @@ final class ClipboardHistoryStore: ObservableObject {
             }
             items.insert(promotedItem, at: 0)
             save()
-            if let imageData = imageData(for: promotedItem) {
-                setPasteboardImageData(imageData)
-            }
             return
         }
 
@@ -153,7 +202,6 @@ final class ClipboardHistoryStore: ObservableObject {
         items.removeAll { $0.text == promotedItem.text }
         items.insert(promotedItem, at: 0)
         save()
-        setPasteboardText(promotedItem.text)
     }
 
     func setPasteboardText(_ text: String) {
@@ -207,12 +255,14 @@ final class ClipboardHistoryStore: ObservableObject {
             )
             let data = try JSONEncoder().encode(items)
             try data.write(to: storageURL, options: .atomic)
+            lastError = nil
         } catch {
-            assertionFailure("Failed to save clipboard history: \(error)")
+            lastError = "Failed to save clipboard history: \(error.localizedDescription)"
+            os_log("Failed to save clipboard history: %{public}@", log: .default, type: .error, error.localizedDescription)
         }
     }
 
-    private static var defaultStorageURL: URL? {
+    private nonisolated static var defaultStorageURL: URL? {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("Squirrel", isDirectory: true)
             .appendingPathComponent("clipboard-history.json")
@@ -227,7 +277,8 @@ final class ClipboardHistoryStore: ObservableObject {
             try imageData.write(to: imageDirectoryURL.appendingPathComponent(fileName), options: .atomic)
             return fileName
         } catch {
-            assertionFailure("Failed to store clipboard image: \(error)")
+            lastError = "Failed to store clipboard image: \(error.localizedDescription)"
+            os_log("Failed to store clipboard image: %{public}@", log: .default, type: .error, error.localizedDescription)
             return nil
         }
     }
