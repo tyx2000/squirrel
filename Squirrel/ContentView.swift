@@ -50,6 +50,7 @@ private enum ClipboardLayout {
     static let cardSpacing: CGFloat = 12
     static let cardMaxHeight: CGFloat = 150
     static let thumbnailCacheLimit = 50 * 1024 * 1024
+    static let resortAnimation = Animation.spring(response: 0.28, dampingFraction: 0.88)
 
     static func configureThumbnailCache() {
         let cache = ClipboardImagePreview.getThumbnailCache()
@@ -63,6 +64,7 @@ struct ContentView: View {
     @EnvironmentObject private var windowManager: WindowManager
 
     @State private var selectedTab: MainTab = .history
+    @Namespace private var cardSortNamespace
 
     var body: some View {
         VStack(spacing: 0) {
@@ -151,13 +153,17 @@ struct ContentView: View {
                     imageURLProvider: { clipboardStore.imageURL(for: item) },
                     imageDataProvider: { clipboardStore.imageData(for: item) },
                     onCopy: {
-                        clipboardStore.copyToPasteboard(item)
+                        guard clipboardStore.copyToPasteboard(item) else { return }
                         MainWindowPresenter.shared.hideClipboardWindow()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                             clipboardStore.promoteItem(item)
                         }
                     },
-                    onDelete: { clipboardStore.delete(item) }
+                    onDelete: {
+                        withAnimation(ClipboardLayout.resortAnimation) {
+                            clipboardStore.delete(item)
+                        }
+                    }
                 )
             }
         case .shortcuts:
@@ -181,12 +187,17 @@ struct ContentView: View {
                             LazyVStack(spacing: ClipboardLayout.cardSpacing) {
                                 ForEach(itemsForColumn(items, columnIndex: columnIndex)) { item in
                                     card(item)
+                                        // Deleting changes modulo-based column assignment; matched geometry
+                                        // carries surviving cards into their new columns instead of snapping.
+                                        .matchedGeometryEffect(id: item.id, in: cardSortNamespace)
+                                        .transition(.scale(scale: 0.94).combined(with: .opacity))
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .top)
                         }
                     }
                     .padding(ClipboardLayout.contentPadding)
+                    .animation(ClipboardLayout.resortAnimation, value: items.map(\.id))
                 }
             }
         }

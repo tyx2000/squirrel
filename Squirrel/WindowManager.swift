@@ -86,7 +86,7 @@ final class WindowManager: ObservableObject {
             return
         }
 
-        let targetFrame = targetFrame(for: mode, in: screen.visibleFrame)
+        let targetFrame = WindowLayoutCalculator.targetFrame(for: mode, in: screen.visibleFrame)
         let axTargetFrame = accessibilityFrame(fromAppKitFrame: targetFrame, on: screen)
         let result = animate(window: window, to: axTargetFrame) ?? set(window: window, frame: axTargetFrame)
         if result.succeeded {
@@ -258,19 +258,6 @@ final class WindowManager: ObservableObject {
 
     private func accessibilityBounds(for screen: NSScreen) -> CGRect {
         accessibilityFrame(fromAppKitFrame: screen.frame, on: screen)
-    }
-
-    private func targetFrame(for mode: WindowLayoutMode, in visibleFrame: CGRect) -> CGRect {
-        let halfWidth = floor(visibleFrame.width / 2)
-
-        switch mode {
-        case .leftHalf:
-            return CGRect(x: visibleFrame.minX, y: visibleFrame.minY, width: halfWidth, height: visibleFrame.height)
-        case .rightHalf:
-            return CGRect(x: visibleFrame.minX + halfWidth, y: visibleFrame.minY, width: visibleFrame.width - halfWidth, height: visibleFrame.height)
-        case .centerHalf:
-            return CGRect(x: visibleFrame.midX - halfWidth / 2, y: visibleFrame.minY, width: halfWidth, height: visibleFrame.height)
-        }
     }
 
     private func set(window: AXUIElement, frame: CGRect) -> (succeeded: Bool, sizeStatus: AXError, positionStatus: AXError) {

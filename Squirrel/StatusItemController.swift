@@ -15,13 +15,12 @@ final class StatusItemController: NSObject {
         super.init()
 
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "apple.logo", accessibilityDescription: "Fruit")
-                ?? NSImage(systemSymbolName: "leaf", accessibilityDescription: "Fruit")
-            if let image {
+            if let image = Self.makeMenuBarIcon() {
                 image.isTemplate = true
                 button.image = image
+                button.imageScaling = .scaleProportionallyDown
             } else {
-                button.title = "F"
+                button.title = "S"
             }
             button.target = self
             button.action = #selector(handleStatusItemClick(_:))
@@ -46,5 +45,12 @@ final class StatusItemController: NSObject {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    private static func makeMenuBarIcon() -> NSImage? {
+        ["watermelon", "cherries", "leaf.fill", "circle.fill"]
+            .lazy
+            .compactMap { NSImage(systemSymbolName: $0, accessibilityDescription: "Squirrel") }
+            .first
     }
 }

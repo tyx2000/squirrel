@@ -18,6 +18,7 @@ final class ClipboardHistoryStore: ObservableObject {
     private let retentionInterval: TimeInterval
     private var timer: Timer?
     private var lastChangeCount: Int
+    private static let maxTextByteCount = 100_000
 
     init(
         pasteboard: NSPasteboard = .general,
@@ -86,7 +87,9 @@ final class ClipboardHistoryStore: ObservableObject {
     func addText(_ text: String, sourceApplicationName: String? = nil, at date: Date = Date()) {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return }
-        guard normalized.count <= 100_000 else {
+        // History preserves exact clipboard text, so enforce the byte limit on the stored payload,
+        // including whitespace and multi-byte characters.
+        guard text.utf8.count <= Self.maxTextByteCount else {
             lastError = "Clipboard text too large (max 100KB)"
             return
         }
@@ -154,25 +157,28 @@ final class ClipboardHistoryStore: ObservableObject {
         return imageDirectoryURL.appendingPathComponent(imageFileName)
     }
 
-    func copyToPasteboard(_ item: ClipboardItem) {
-        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
+    @discardableResult
+    func copyToPasteboard(_ item: ClipboardItem) -> Bool {
+        guard let index = items.firstIndex(where: { $0.id == item.id }) else { return false }
         let itemToCopy = items[index]
 
         if itemToCopy.isImage {
             if let imageData = imageData(for: itemToCopy) {
                 setPasteboardImageData(imageData)
+                return true
             }
-            return
+            return false
         }
 
         let normalized = itemToCopy.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return }
+        guard !normalized.isEmpty else { return false }
 
         setPasteboardText(itemToCopy.text)
+        return true
     }
 
     func copyToPasteboardAndPromote(_ item: ClipboardItem) {
-        copyToPasteboard(item)
+        guard copyToPasteboard(item) else { return }
         promoteItem(item)
     }
 
