@@ -137,10 +137,11 @@ final class MainWindowPresenter {
             .environmentObject(services.clipboardStore)
             .environmentObject(services.hotKeyManager)
             .environmentObject(services.windowManager)
+            .environmentObject(services.screenCaptureService)
             .frame(width: windowSize.width, height: windowSize.height)
             .ignoresSafeArea()
 
-        let window = NSWindow(
+        let window = MainClipboardWindow(
             contentRect: initialFrame(),
             styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
@@ -208,5 +209,20 @@ private final class MainWindowDelegate: NSObject, NSWindowDelegate {
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(width: 720, height: 480)
+    }
+}
+
+private final class MainClipboardWindow: NSWindow {
+    override func cancelOperation(_ sender: Any?) {
+        NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
+        MainWindowPresenter.shared.hideClipboardWindow(self)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            cancelOperation(nil)
+        } else {
+            super.keyDown(with: event)
+        }
     }
 }

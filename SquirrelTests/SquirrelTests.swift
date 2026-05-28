@@ -190,6 +190,16 @@ struct SquirrelTests {
         #expect(pasteboard.readObjects(forClasses: [NSImage.self])?.first is NSImage)
     }
 
+    @Test func captureCropRectConvertsSelectionPointsToSnapshotPixels() async throws {
+        let cropRect = ScreenCaptureService.pixelCropRect(
+            for: CGRect(x: 20, y: 30, width: 100, height: 50),
+            snapshotPointSize: CGSize(width: 400, height: 300),
+            snapshotPixelSize: CGSize(width: 800, height: 600)
+        )
+
+        #expect(cropRect == CGRect(x: 40, y: 440, width: 200, height: 100))
+    }
+
     @Test func deletingCurrentHistoryItemClearsPasteboard() async throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)

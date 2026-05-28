@@ -8,6 +8,7 @@ final class AppServices: ObservableObject {
     let clipboardStore: ClipboardHistoryStore
     let hotKeyManager: HotKeyManager
     let windowManager: WindowManager
+    let screenCaptureService: ScreenCaptureService
     let statusItemController: StatusItemController
     private var latestLockScreenRequestID = UUID()
 
@@ -15,6 +16,7 @@ final class AppServices: ObservableObject {
         clipboardStore = ClipboardHistoryStore()
         hotKeyManager = HotKeyManager()
         windowManager = WindowManager()
+        screenCaptureService = ScreenCaptureService(clipboardStore: clipboardStore)
         statusItemController = StatusItemController()
 
         configure()
@@ -50,6 +52,12 @@ final class AppServices: ObservableObject {
                         for: .lockScreen
                     )
                 }
+            }
+        }
+
+        hotKeyManager.setAction(.captureArea) { [screenCaptureService, weak hotKeyManager] in
+            screenCaptureService.startAreaCapture { message in
+                hotKeyManager?.reportActionFailure(message, for: .captureArea)
             }
         }
 

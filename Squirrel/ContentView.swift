@@ -62,6 +62,7 @@ struct ContentView: View {
     @EnvironmentObject private var clipboardStore: ClipboardHistoryStore
     @EnvironmentObject private var hotKeyManager: HotKeyManager
     @EnvironmentObject private var windowManager: WindowManager
+    @EnvironmentObject private var screenCaptureService: ScreenCaptureService
 
     @State private var selectedTab: MainTab = .history
     @Namespace private var cardSortNamespace
@@ -249,6 +250,17 @@ struct ContentView: View {
                 if let hotKeyMessage = hotKeyManager.lastEventMessage {
                     Label(hotKeyMessage, systemImage: "keyboard.badge.eye")
                         .foregroundStyle(.orange)
+                }
+
+                if let captureMessage = screenCaptureService.lastMessage {
+                    HStack(spacing: 10) {
+                        Label(captureMessage, systemImage: "camera.viewfinder")
+                            .foregroundStyle(.orange)
+                        Spacer(minLength: 12)
+                        Button("Dismiss") {
+                            screenCaptureService.clearMessage()
+                        }
+                    }
                 }
 
                 if let message = windowManager.lastMessage {

@@ -10,6 +10,7 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
     case rightHalf
     case centerHalf
     case lockScreen
+    case captureArea
 
     var id: String { rawValue }
 
@@ -20,6 +21,7 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
         case .rightHalf: "Window Right Two Thirds"
         case .centerHalf: "Window Center Two Thirds"
         case .lockScreen: "Lock Screen"
+        case .captureArea: "Capture Area"
         }
     }
 
@@ -30,6 +32,7 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
         case .rightHalf: 3
         case .centerHalf: 4
         case .lockScreen: 5
+        case .captureArea: 6
         }
     }
 }
@@ -43,7 +46,8 @@ struct HotKeyCombo: Codable, Hashable {
         .leftHalf: HotKeyCombo(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .rightHalf: HotKeyCombo(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .centerHalf: HotKeyCombo(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
-        .lockScreen: HotKeyCombo(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey | optionKey | cmdKey))
+        .lockScreen: HotKeyCombo(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey | optionKey | cmdKey)),
+        .captureArea: HotKeyCombo(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(controlKey | optionKey | cmdKey))
     ]
 
     static let legacyClipboardWindowShortcut = HotKeyCombo(
