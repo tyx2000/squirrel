@@ -19,6 +19,8 @@ final class ClipboardHistoryStore: ObservableObject {
     private var timer: Timer?
     private var lastChangeCount: Int
     private static let maxTextByteCount = 100_000
+    private static let maxImageDataByteCount = 50_000_000
+    static let maxImagePixelCount = 16_000_000
 
     init(
         pasteboard: NSPasteboard = .general,
@@ -102,7 +104,7 @@ final class ClipboardHistoryStore: ObservableObject {
 
     func addImageData(_ imageData: Data, sourceApplicationName: String? = nil, at date: Date = Date()) {
         guard !imageData.isEmpty else { return }
-        guard imageData.count <= 50_000_000 else {
+        guard imageData.count <= Self.maxImageDataByteCount else {
             lastError = "Image too large (max 50MB)"
             return
         }
@@ -364,7 +366,26 @@ final class ClipboardHistoryStore: ObservableObject {
             return nil
         }
 
-        return image.tiffRepresentation
+        guard Self.imagePixelCount(for: image) <= Self.maxImagePixelCount else {
+            lastError = "Image too large (max 16MP)"
+            return nil
+        }
+
+        return autoreleasepool {
+            image.tiffRepresentation
+        }
+    }
+
+    static func imagePixelCount(for image: NSImage) -> Int {
+        let representationPixelCount = image.representations
+            .map { max($0.pixelsWide, 1) * max($0.pixelsHigh, 1) }
+            .max()
+
+        if let representationPixelCount {
+            return representationPixelCount
+        }
+
+        return max(Int(image.size.width), 1) * max(Int(image.size.height), 1)
     }
 
     private static func imageFingerprint(for imageData: Data) -> String {

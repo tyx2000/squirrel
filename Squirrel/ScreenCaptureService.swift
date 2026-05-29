@@ -39,7 +39,11 @@ final class ScreenCaptureService: ObservableObject {
             defer { isPreparingCapture = false }
 
             do {
-                let snapshotsByDisplayID = try await Self.captureSnapshots(for: NSScreen.screens)
+                guard let captureScreen = Self.screenContainingMouse(from: NSScreen.screens) else {
+                    fail("Capture Area could not identify the selected screen.", onFailure: onFailure)
+                    return
+                }
+                let snapshotsByDisplayID = try await Self.captureSnapshots(for: [captureScreen])
                 guard !snapshotsByDisplayID.isEmpty else {
                     fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
                     return
@@ -50,6 +54,13 @@ final class ScreenCaptureService: ObservableObject {
                 fail("Capture Area failed: \(error.localizedDescription)", onFailure: onFailure)
             }
         }
+    }
+
+    private static func screenContainingMouse(from screens: [NSScreen]) -> NSScreen? {
+        let mouseLocation = NSEvent.mouseLocation
+        return screens.first { $0.frame.contains(mouseLocation) }
+            ?? NSScreen.main
+            ?? screens.first
     }
 
     private func beginOverlay(
@@ -199,7 +210,31 @@ final class ScreenCaptureService: ObservableObject {
             snapshotPixelSize: CGSize(width: snapshot.image.width, height: snapshot.image.height)
         )
         guard cropRect.width >= 1, cropRect.height >= 1 else { return nil }
-        return snapshot.image.cropping(to: cropRect)
+        guard let croppedImage = snapshot.image.cropping(to: cropRect) else { return nil }
+        return detachedCopy(of: croppedImage)
+    }
+
+    private static func detachedCopy(of image: CGImage) -> CGImage? {
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else {
+            return nil
+        }
+
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     private static func captureImage(in rect: CGRect) async throws -> CGImage {
@@ -330,8 +365,10 @@ final class ScreenCaptureService: ObservableObject {
     }
 
     private static func pngData(from image: CGImage) -> Data? {
-        let bitmap = NSBitmapImageRep(cgImage: image)
-        return bitmap.representation(using: .png, properties: [:])
+        autoreleasepool {
+            let bitmap = NSBitmapImageRep(cgImage: image)
+            return bitmap.representation(using: .png, properties: [:])
+        }
     }
 }
 

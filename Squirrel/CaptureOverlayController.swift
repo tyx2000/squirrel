@@ -26,6 +26,93 @@ enum CaptureOutputAction {
     case copy
 }
 
+enum CaptureResizeHandle: CaseIterable {
+    case topLeft
+    case top
+    case topRight
+    case right
+    case bottomRight
+    case bottom
+    case bottomLeft
+    case left
+}
+
+struct CaptureResizeHandleMetrics {
+    var cornerSize: CGSize
+    var edgeThickness: CGFloat
+    var edgeLength: CGFloat
+    var hitOutset: CGFloat
+}
+
+enum CaptureResizeHandleGeometry {
+    static func handle(
+        at point: CGPoint,
+        in rect: CGRect,
+        metrics: CaptureResizeHandleMetrics
+    ) -> CaptureResizeHandle? {
+        handleRects(for: rect, metrics: metrics)
+            .filter { _, handleRect in
+                handleRect.insetBy(dx: -metrics.hitOutset, dy: -metrics.hitOutset).contains(point)
+            }
+            .min { lhs, rhs in
+                distanceSquared(from: point, to: center(of: lhs.rect))
+                    < distanceSquared(from: point, to: center(of: rhs.rect))
+            }?
+            .handle
+    }
+
+    static func handleRects(
+        for rect: CGRect,
+        metrics: CaptureResizeHandleMetrics
+    ) -> [(handle: CaptureResizeHandle, rect: CGRect)] {
+        [
+            (.topLeft, cornerHandleRect(center: CGPoint(x: rect.minX, y: rect.maxY), metrics: metrics)),
+            (.top, edgeHandleRect(center: CGPoint(x: rect.midX, y: rect.maxY), horizontal: true, metrics: metrics)),
+            (.topRight, cornerHandleRect(center: CGPoint(x: rect.maxX, y: rect.maxY), metrics: metrics)),
+            (.right, edgeHandleRect(center: CGPoint(x: rect.maxX, y: rect.midY), horizontal: false, metrics: metrics)),
+            (.bottomRight, cornerHandleRect(center: CGPoint(x: rect.maxX, y: rect.minY), metrics: metrics)),
+            (.bottom, edgeHandleRect(center: CGPoint(x: rect.midX, y: rect.minY), horizontal: true, metrics: metrics)),
+            (.bottomLeft, cornerHandleRect(center: CGPoint(x: rect.minX, y: rect.minY), metrics: metrics)),
+            (.left, edgeHandleRect(center: CGPoint(x: rect.minX, y: rect.midY), horizontal: false, metrics: metrics))
+        ]
+    }
+
+    private static func cornerHandleRect(center: CGPoint, metrics: CaptureResizeHandleMetrics) -> CGRect {
+        CGRect(
+            x: center.x - metrics.cornerSize.width / 2,
+            y: center.y - metrics.cornerSize.height / 2,
+            width: metrics.cornerSize.width,
+            height: metrics.cornerSize.height
+        )
+    }
+
+    private static func edgeHandleRect(
+        center: CGPoint,
+        horizontal: Bool,
+        metrics: CaptureResizeHandleMetrics
+    ) -> CGRect {
+        let size = horizontal
+            ? CGSize(width: metrics.edgeLength, height: metrics.edgeThickness)
+            : CGSize(width: metrics.edgeThickness, height: metrics.edgeLength)
+        return CGRect(
+            x: center.x - size.width / 2,
+            y: center.y - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+    }
+
+    private static func center(of rect: CGRect) -> CGPoint {
+        CGPoint(x: rect.midX, y: rect.midY)
+    }
+
+    private static func distanceSquared(from point: CGPoint, to target: CGPoint) -> CGFloat {
+        let dx = point.x - target.x
+        let dy = point.y - target.y
+        return dx * dx + dy * dy
+    }
+}
+
 @MainActor
 final class CaptureOverlayController {
     private var windows: [CaptureOverlayWindow] = []
@@ -102,6 +189,7 @@ final class CaptureOverlayController {
     }
 
     private func closeWindows() {
+        NSCursor.arrow.set()
         for window in windows {
             window.orderOut(nil)
         }
@@ -146,6 +234,7 @@ final class CaptureOverlayView: NSView {
 
     private let captureScreen: NSScreen
     private let snapshot: CaptureScreenSnapshot
+    private let snapshotImage: NSImage
     private let onComplete: (CaptureOutputAction, NSScreen, CaptureScreenSnapshot, CGRect, [CaptureAnnotation]) -> Void
     private let onCancel: () -> Void
     private var dragStart: CGPoint?
@@ -159,14 +248,23 @@ final class CaptureOverlayView: NSView {
     private var moveStart: CGPoint?
     private var moveOriginalRect: CGRect?
     private var moveOriginalAnnotations: [CaptureAnnotation] = []
+    private var resizeHandle: CaptureResizeHandle?
+    private var resizeOriginalRect: CGRect?
+    private var resizeOriginalAnnotations: [CaptureAnnotation] = []
     private let minimumSelectionSize: CGFloat = 6
     private let annotationColor = NSColor.systemRed
+    private let cornerHandleSize = CGSize(width: 4, height: 4)
+    private let edgeHandleThickness: CGFloat = 4
+    private let edgeHandleLength: CGFloat = 28
+    private let resizeHitOutset: CGFloat = 8
     private let toolbarSize = CGSize(width: 232, height: 36)
     private let toolbarGap: CGFloat = 12
     private let toolbarButtonSize = CGSize(width: 28, height: 28)
     private let toolbarButtonSpacing: CGFloat = 8
     private let toolbarBackgroundColor = NSColor(calibratedWhite: 0.98, alpha: 0.96)
     private let toolbarSelectedBackgroundColor = NSColor.systemRed.withAlphaComponent(0.16)
+    private static let diagonalResizeDownCursor = makeDiagonalResizeCursor(flipped: false)
+    private static let diagonalResizeUpCursor = makeDiagonalResizeCursor(flipped: true)
 
     init(
         screen: NSScreen,
@@ -176,6 +274,7 @@ final class CaptureOverlayView: NSView {
     ) {
         self.captureScreen = screen
         self.snapshot = snapshot
+        self.snapshotImage = NSImage(cgImage: snapshot.image, size: snapshot.pointSize)
         self.onComplete = onComplete
         self.onCancel = onCancel
         super.init(frame: NSRect(origin: .zero, size: screen.frame.size))
@@ -205,15 +304,22 @@ final class CaptureOverlayView: NSView {
         }
 
         if let selectionRect {
-            if selectionRect.contains(point) {
+            if let handle = resizeHandle(at: point, in: selectionRect) {
+                resizeHandle = handle
+                resizeOriginalRect = selectionRect
+                resizeOriginalAnnotations = annotations
+                cursor(for: handle).set()
+            } else if selectionRect.contains(point) {
                 if let activeTool {
                     annotationStart = point
                     annotationCurrent = point
                     self.activeTool = activeTool
+                    NSCursor.crosshair.set()
                 } else {
                     moveStart = point
                     moveOriginalRect = selectionRect
                     moveOriginalAnnotations = annotations
+                    NSCursor.closedHand.set()
                 }
             } else {
                 clearSelectionState()
@@ -232,10 +338,17 @@ final class CaptureOverlayView: NSView {
         guard pressedToolbarAction == nil else { return }
 
         let point = convert(event.locationInWindow, from: nil)
-        if moveStart != nil {
+        if resizeHandle != nil {
+            resizeSelection(to: point)
+            if let resizeHandle {
+                cursor(for: resizeHandle).set()
+            }
+        } else if moveStart != nil {
             moveSelection(to: point)
+            NSCursor.closedHand.set()
         } else if selectionRect != nil, annotationStart != nil {
             annotationCurrent = point
+            NSCursor.crosshair.set()
         } else {
             dragCurrent = point
         }
@@ -250,6 +363,7 @@ final class CaptureOverlayView: NSView {
             if toolbarButtons.contains(where: { $0.action == pressedToolbarAction && $0.rect.contains(point) }) {
                 handle(pressedToolbarAction)
             }
+            updateCursor(at: point)
             needsDisplay = true
             return
         }
@@ -262,6 +376,17 @@ final class CaptureOverlayView: NSView {
             }
             self.annotationStart = nil
             annotationCurrent = nil
+            updateCursor(at: point)
+            needsDisplay = true
+            return
+        }
+
+        if resizeHandle != nil {
+            resizeSelection(to: point)
+            resizeHandle = nil
+            resizeOriginalRect = nil
+            resizeOriginalAnnotations.removeAll()
+            updateCursor(at: point)
             needsDisplay = true
             return
         }
@@ -271,6 +396,7 @@ final class CaptureOverlayView: NSView {
             moveStart = nil
             moveOriginalRect = nil
             moveOriginalAnnotations.removeAll()
+            updateCursor(at: point)
             needsDisplay = true
             return
         }
@@ -287,7 +413,12 @@ final class CaptureOverlayView: NSView {
         dragStart = nil
         dragCurrent = nil
         activeTool = nil
+        updateCursor(at: point)
         needsDisplay = true
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        updateCursor(at: convert(event.locationInWindow, from: nil))
     }
 
     override func keyDown(with event: NSEvent) {
@@ -312,6 +443,7 @@ final class CaptureOverlayView: NSView {
             }
             drawSizeLabel(for: selectedRect)
             if selectionRect != nil {
+                drawResizeHandles(for: selectedRect)
                 drawToolbar()
             }
         } else {
@@ -321,7 +453,7 @@ final class CaptureOverlayView: NSView {
     }
 
     private func drawFrozenSnapshot() {
-        NSImage(cgImage: snapshot.image, size: snapshot.pointSize).draw(
+        snapshotImage.draw(
             in: bounds,
             from: CGRect(origin: .zero, size: snapshot.pointSize),
             operation: .sourceOver,
@@ -379,6 +511,42 @@ final class CaptureOverlayView: NSView {
         }
     }
 
+    private func updateCursor(at point: CGPoint) {
+        if let resizeHandle {
+            cursor(for: resizeHandle).set()
+            return
+        }
+
+        if moveStart != nil {
+            NSCursor.closedHand.set()
+            return
+        }
+
+        if annotationStart != nil {
+            NSCursor.crosshair.set()
+            return
+        }
+
+        guard let selectionRect else {
+            NSCursor.crosshair.set()
+            return
+        }
+
+        if let handle = resizeHandle(at: point, in: selectionRect) {
+            cursor(for: handle).set()
+        } else if toolbarButtons.contains(where: { $0.rect.contains(point) }) {
+            NSCursor.arrow.set()
+        } else if selectionRect.contains(point) {
+            if activeTool != nil {
+                NSCursor.crosshair.set()
+            } else {
+                NSCursor.openHand.set()
+            }
+        } else {
+            NSCursor.crosshair.set()
+        }
+    }
+
     private func handle(_ action: ToolbarAction) {
         switch action {
         case .tool(let tool):
@@ -396,6 +564,7 @@ final class CaptureOverlayView: NSView {
     }
 
     private func closeCapture() {
+        NSCursor.arrow.set()
         dragStart = nil
         dragCurrent = nil
         clearSelectionState()
@@ -412,6 +581,9 @@ final class CaptureOverlayView: NSView {
         moveStart = nil
         moveOriginalRect = nil
         moveOriginalAnnotations.removeAll()
+        resizeHandle = nil
+        resizeOriginalRect = nil
+        resizeOriginalAnnotations.removeAll()
     }
 
     private func currentAnnotation(tool: CaptureAnnotationTool) -> CaptureAnnotation? {
@@ -443,6 +615,74 @@ final class CaptureOverlayView: NSView {
         }
     }
 
+    private func resizeSelection(to point: CGPoint) {
+        guard let resizeHandle, let resizeOriginalRect else { return }
+        let resizedRect = resizedSelectionRect(from: resizeOriginalRect, handle: resizeHandle, to: point)
+        selectionRect = resizedRect
+        annotations = resizeOriginalAnnotations.map { annotation in
+            CaptureAnnotation(
+                tool: annotation.tool,
+                start: clamp(annotation.start, to: resizedRect),
+                end: clamp(annotation.end, to: resizedRect)
+            )
+        }
+    }
+
+    private func resizedSelectionRect(from originalRect: CGRect, handle: CaptureResizeHandle, to point: CGPoint) -> CGRect {
+        var minX = originalRect.minX
+        var maxX = originalRect.maxX
+        var minY = originalRect.minY
+        var maxY = originalRect.maxY
+
+        switch handle {
+        case .topLeft:
+            minX = point.x
+            maxY = point.y
+        case .top:
+            maxY = point.y
+        case .topRight:
+            maxX = point.x
+            maxY = point.y
+        case .right:
+            maxX = point.x
+        case .bottomRight:
+            maxX = point.x
+            minY = point.y
+        case .bottom:
+            minY = point.y
+        case .bottomLeft:
+            minX = point.x
+            minY = point.y
+        case .left:
+            minX = point.x
+        }
+
+        minX = max(bounds.minX, minX)
+        maxX = min(bounds.maxX, maxX)
+        minY = max(bounds.minY, minY)
+        maxY = min(bounds.maxY, maxY)
+
+        if maxX - minX < minimumSelectionSize {
+            switch handle {
+            case .left, .topLeft, .bottomLeft:
+                minX = max(bounds.minX, maxX - minimumSelectionSize)
+            default:
+                maxX = min(bounds.maxX, minX + minimumSelectionSize)
+            }
+        }
+
+        if maxY - minY < minimumSelectionSize {
+            switch handle {
+            case .bottom, .bottomLeft, .bottomRight:
+                minY = max(bounds.minY, maxY - minimumSelectionSize)
+            default:
+                maxY = min(bounds.maxY, minY + minimumSelectionSize)
+            }
+        }
+
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
     private func drawDimmedBackground(around rect: CGRect, exposingToolbar: Bool) {
         let dimPath = NSBezierPath(rect: bounds)
         dimPath.append(NSBezierPath(rect: rect))
@@ -459,6 +699,71 @@ final class CaptureOverlayView: NSView {
         let border = NSBezierPath(rect: rect)
         border.lineWidth = 2
         border.stroke()
+    }
+
+    private func drawResizeHandles(for rect: CGRect) {
+        for handleRect in resizeHandleRects(for: rect).map(\.rect) {
+            NSColor.windowBackgroundColor.withAlphaComponent(0.96).setFill()
+            NSBezierPath(roundedRect: handleRect, xRadius: 1, yRadius: 1).fill()
+            NSColor.controlAccentColor.setStroke()
+            let border = NSBezierPath(roundedRect: handleRect, xRadius: 1, yRadius: 1)
+            border.lineWidth = 1
+            border.stroke()
+        }
+    }
+
+    private func resizeHandle(at point: CGPoint, in rect: CGRect) -> CaptureResizeHandle? {
+        CaptureResizeHandleGeometry.handle(at: point, in: rect, metrics: resizeHandleMetrics)
+    }
+
+    private func resizeHandleRects(for rect: CGRect) -> [(handle: CaptureResizeHandle, rect: CGRect)] {
+        CaptureResizeHandleGeometry.handleRects(for: rect, metrics: resizeHandleMetrics)
+    }
+
+    private var resizeHandleMetrics: CaptureResizeHandleMetrics {
+        CaptureResizeHandleMetrics(
+            cornerSize: cornerHandleSize,
+            edgeThickness: edgeHandleThickness,
+            edgeLength: edgeHandleLength,
+            hitOutset: resizeHitOutset
+        )
+    }
+
+    private func cursor(for handle: CaptureResizeHandle) -> NSCursor {
+        switch handle {
+        case .top, .bottom:
+            return .resizeUpDown
+        case .left, .right:
+            return .resizeLeftRight
+        case .topLeft, .bottomRight:
+            return Self.diagonalResizeDownCursor
+        case .topRight, .bottomLeft:
+            return Self.diagonalResizeUpCursor
+        }
+    }
+
+    private static func makeDiagonalResizeCursor(flipped: Bool) -> NSCursor {
+        let size = NSSize(width: 18, height: 18)
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        NSColor.clear.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        NSColor.black.setStroke()
+
+        let path = NSBezierPath()
+        path.lineWidth = 2
+        if flipped {
+            path.move(to: NSPoint(x: 4, y: 4))
+            path.line(to: NSPoint(x: 14, y: 14))
+        } else {
+            path.move(to: NSPoint(x: 4, y: 14))
+            path.line(to: NSPoint(x: 14, y: 4))
+        }
+        path.stroke()
+
+        image.unlockFocus()
+        return NSCursor(image: image, hotSpot: NSPoint(x: 9, y: 9))
     }
 
     private func drawAnnotations() {

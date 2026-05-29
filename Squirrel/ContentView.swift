@@ -49,12 +49,14 @@ private enum ClipboardLayout {
     static let columnSpacing: CGFloat = 12
     static let cardSpacing: CGFloat = 12
     static let cardMaxHeight: CGFloat = 150
-    static let thumbnailCacheLimit = 50 * 1024 * 1024
+    static let thumbnailCacheLimit = 8 * 1024 * 1024
+    static let thumbnailCacheCountLimit = 50
     static let resortAnimation = Animation.spring(response: 0.28, dampingFraction: 0.88)
 
     static func configureThumbnailCache() {
         let cache = ClipboardImagePreview.getThumbnailCache()
         cache.totalCostLimit = thumbnailCacheLimit
+        cache.countLimit = thumbnailCacheCountLimit
     }
 }
 
@@ -446,7 +448,11 @@ private struct ClipboardImagePreview: View {
         }
 
         if let result {
-            Self.thumbnailCache.setObject(result, forKey: cacheKey)
+            Self.thumbnailCache.setObject(
+                result,
+                forKey: cacheKey,
+                cost: ClipboardImageThumbnail.memoryCost(for: result)
+            )
         }
 
         return result
@@ -470,10 +476,22 @@ private enum ClipboardImageThumbnail {
 
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
               let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
-            return NSImage(data: data)
+            return nil
         }
 
         return NSImage(cgImage: image, size: NSSize(width: 38, height: 38))
+    }
+
+    static func memoryCost(for image: NSImage) -> Int {
+        let representationCost = image.representations
+            .map { max($0.pixelsWide, 1) * max($0.pixelsHigh, 1) * 4 }
+            .max()
+
+        if let representationCost {
+            return representationCost
+        }
+
+        return max(Int(image.size.width), 1) * max(Int(image.size.height), 1) * 4
     }
 
     private static var thumbnailOptions: CFDictionary {

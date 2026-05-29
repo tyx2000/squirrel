@@ -200,6 +200,61 @@ struct SquirrelTests {
         #expect(cropRect == CGRect(x: 40, y: 440, width: 200, height: 100))
     }
 
+    @Test func captureResizeHandlePrefersNearestHandleWhenHitZonesOverlap() async throws {
+        let metrics = CaptureResizeHandleMetrics(
+            cornerSize: CGSize(width: 4, height: 4),
+            edgeThickness: 4,
+            edgeLength: 28,
+            hitOutset: 8
+        )
+        let selectionRect = CGRect(x: 0, y: 0, width: 20, height: 20)
+
+        let handle = CaptureResizeHandleGeometry.handle(
+            at: CGPoint(x: 8, y: 20),
+            in: selectionRect,
+            metrics: metrics
+        )
+
+        #expect(handle == .top)
+    }
+
+    @Test func captureResizeHandleKeepsCornerHandleNearCorner() async throws {
+        let metrics = CaptureResizeHandleMetrics(
+            cornerSize: CGSize(width: 4, height: 4),
+            edgeThickness: 4,
+            edgeLength: 28,
+            hitOutset: 8
+        )
+        let selectionRect = CGRect(x: 0, y: 0, width: 20, height: 20)
+
+        let handle = CaptureResizeHandleGeometry.handle(
+            at: CGPoint(x: 1, y: 20),
+            in: selectionRect,
+            metrics: metrics
+        )
+
+        #expect(handle == .topLeft)
+    }
+
+    @Test func clipboardImagePixelCountUsesBackingPixels() async throws {
+        let image = NSImage(size: NSSize(width: 40, height: 30))
+        let representation = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: 400,
+            pixelsHigh: 300,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ))
+        image.addRepresentation(representation)
+
+        #expect(ClipboardHistoryStore.imagePixelCount(for: image) == 120_000)
+    }
+
     @Test func deletingCurrentHistoryItemClearsPasteboard() async throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)
