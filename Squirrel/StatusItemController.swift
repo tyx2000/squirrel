@@ -31,16 +31,18 @@ final class StatusItemController: NSObject {
 
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
         if NSApp.currentEvent?.type == .rightMouseUp {
-            statusItem.menu = menu
-            statusItem.button?.performClick(nil)
-            statusItem.menu = nil
+            menu.popUp(
+                positioning: menu.items.first,
+                at: NSPoint(x: 0, y: sender.bounds.height + 4),
+                in: sender
+            )
         } else {
-            openWindow()
+            toggleWindow()
         }
     }
 
-    @objc private func openWindow() {
-        NotificationCenter.default.post(name: .openClipboardWindow, object: nil)
+    @objc private func toggleWindow() {
+        MainWindowPresenter.shared.toggleClipboardWindow()
     }
 
     @objc private func quit() {
