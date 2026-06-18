@@ -166,10 +166,23 @@ final class HotKeyManager: ObservableObject {
     }
 
     private static func loadShortcuts() -> [HotKeyCommand: HotKeyCombo] {
-        guard
-            let data = UserDefaults.standard.data(forKey: defaultsKey),
-            let decoded = try? JSONDecoder().decode([HotKeyCommand: HotKeyCombo].self, from: data)
-        else {
+        shortcutsByMergingDefaults(from: UserDefaults.standard.data(forKey: defaultsKey))
+    }
+
+    static func shortcutsByMergingDefaults(from data: Data?) -> [HotKeyCommand: HotKeyCombo] {
+        guard let data else {
+            return HotKeyCombo.defaultShortcuts
+        }
+
+        let decoded: [HotKeyCommand: HotKeyCombo]
+        if let commandKeyedShortcuts = try? JSONDecoder().decode([HotKeyCommand: HotKeyCombo].self, from: data) {
+            decoded = commandKeyedShortcuts
+        } else if let rawKeyedShortcuts = try? JSONDecoder().decode([String: HotKeyCombo].self, from: data) {
+            decoded = rawKeyedShortcuts.reduce(into: [:]) { result, item in
+                guard let command = HotKeyCommand(rawValue: item.key) else { return }
+                result[command] = item.value
+            }
+        } else {
             return HotKeyCombo.defaultShortcuts
         }
 

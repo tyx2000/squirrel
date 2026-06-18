@@ -161,6 +161,7 @@ final class MainWindowPresenter {
             .environmentObject(services.hotKeyManager)
             .environmentObject(services.windowManager)
             .environmentObject(services.screenCaptureService)
+            .environmentObject(services.screenRecordingService)
             .frame(width: windowSize.width, height: windowSize.height)
             .ignoresSafeArea()
 

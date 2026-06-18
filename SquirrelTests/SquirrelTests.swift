@@ -7,6 +7,7 @@
 // Purpose: Verifies clipboard history storage, bounded retention, copy promotion, pasteboard clearing, and image files.
 
 import AppKit
+import Carbon
 import Foundation
 import Testing
 @testable import Squirrel
@@ -281,6 +282,21 @@ struct SquirrelTests {
 
         #expect(store.items.isEmpty)
         #expect(pasteboard.string(forType: .string) == "new")
+    }
+
+    @Test func hotKeyLoadingIgnoresUnknownCommandsAndKeepsDefaults() async throws {
+        let customClipboardShortcut = HotKeyCombo(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(controlKey))
+        let rawShortcuts = [
+            HotKeyCommand.clipboardWindow.rawValue: customClipboardShortcut,
+            "removedFutureCommand": HotKeyCombo(keyCode: UInt32(kVK_ANSI_Z), modifiers: UInt32(optionKey))
+        ]
+        let data = try JSONEncoder().encode(rawShortcuts)
+
+        let shortcuts = HotKeyManager.shortcutsByMergingDefaults(from: data)
+
+        #expect(shortcuts[.clipboardWindow] == customClipboardShortcut)
+        #expect(shortcuts[.recordWindow] == HotKeyCombo.defaultShortcuts[.recordWindow])
+        #expect(shortcuts[.lockScreen] == HotKeyCombo.defaultShortcuts[.lockScreen])
     }
 
     private static func testImageData(color: NSColor = .red) -> Data? {

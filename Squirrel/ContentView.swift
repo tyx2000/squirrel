@@ -64,6 +64,7 @@ struct ContentView: View {
     @EnvironmentObject private var hotKeyManager: HotKeyManager
     @EnvironmentObject private var windowManager: WindowManager
     @EnvironmentObject private var screenCaptureService: ScreenCaptureService
+    @EnvironmentObject private var screenRecordingService: ScreenRecordingService
 
     @State private var selectedTab: MainTab = .history
     @State private var isQuitButtonHovering = false
@@ -269,6 +270,31 @@ struct ContentView: View {
                         Spacer(minLength: 12)
                         Button("Dismiss") {
                             screenCaptureService.clearMessage()
+                        }
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Label(
+                        screenRecordingService.isRecording ? "Recording in progress" : "Screen recording is idle",
+                        systemImage: screenRecordingService.isRecording ? "record.circle" : "video"
+                    )
+                    .foregroundStyle(screenRecordingService.isRecording ? .red : AppPalette.secondaryText)
+                    Spacer(minLength: 12)
+                    if let outputURL = screenRecordingService.outputURL {
+                        Text(outputURL.lastPathComponent)
+                            .font(.footnote)
+                            .foregroundStyle(AppPalette.secondaryText)
+                    }
+                }
+
+                if let recordingMessage = screenRecordingService.lastMessage {
+                    HStack(spacing: 10) {
+                        Label(recordingMessage, systemImage: "video.badge.checkmark")
+                            .foregroundStyle(screenRecordingService.isRecording ? .red : AppPalette.secondaryText)
+                        Spacer(minLength: 12)
+                        Button("Dismiss") {
+                            screenRecordingService.clearMessage()
                         }
                     }
                 }
