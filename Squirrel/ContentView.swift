@@ -44,11 +44,10 @@ private enum MainTab: String, CaseIterable, Identifiable {
 }
 
 private enum ClipboardLayout {
-    static let columnCount = 4
-    static let contentPadding: CGFloat = 12
-    static let columnSpacing: CGFloat = 12
-    static let cardSpacing: CGFloat = 12
-    static let cardMaxHeight: CGFloat = 150
+    static let contentPadding: CGFloat = 14
+    static let rowSpacing: CGFloat = 10
+    static let rowMaxHeight: CGFloat = 300
+    static let rowActionWidth: CGFloat = 82
     static let thumbnailCacheLimit = 8 * 1024 * 1024
     static let thumbnailCacheCountLimit = 50
     static let resortAnimation = Animation.spring(response: 0.28, dampingFraction: 0.88)
@@ -67,6 +66,7 @@ struct ContentView: View {
     @EnvironmentObject private var screenCaptureService: ScreenCaptureService
 
     @State private var selectedTab: MainTab = .history
+    @State private var isQuitButtonHovering = false
     @Namespace private var cardSortNamespace
 
     var body: some View {
@@ -110,7 +110,6 @@ struct ContentView: View {
 
     private var tabBar: some View {
         HStack(spacing: 12) {
-            Spacer(minLength: 0)
             ForEach(MainTab.allCases) { tab in
                 Button {
                     withAnimation(.easeInOut(duration: 0.18)) {
@@ -135,7 +134,29 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
             }
+
             Spacer(minLength: 0)
+
+            Button {
+                NSApp.terminate(nil)
+            } label: {
+                Image(systemName: "power")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isQuitButtonHovering ? .white : .red)
+                    .frame(width: 34, height: 30)
+                    .background(
+                        Capsule()
+                            .fill(isQuitButtonHovering ? Color.red.opacity(0.92) : .clear)
+                    )
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Quit")
+            .onHover { hovering in
+                withAnimation(.easeInOut(duration: 0.12)) {
+                    isQuitButtonHovering = hovering
+                }
+            }
         }
         .padding(.horizontal, 18)
         .frame(height: 56)
@@ -146,7 +167,7 @@ struct ContentView: View {
     private var content: some View {
         switch selectedTab {
         case .history:
-            clipboardHistoryGrid(
+            clipboardHistoryList(
                 items: clipboardStore.items,
                 emptyTitle: "No Clipboard History",
                 emptySubtitle: "Copied text and images will appear here automatically."
@@ -174,7 +195,7 @@ struct ContentView: View {
         }
     }
 
-    private func clipboardHistoryGrid<Card: View>(
+    private func clipboardHistoryList<Card: View>(
         items: [ClipboardItem],
         emptyTitle: String,
         emptySubtitle: String,
@@ -185,30 +206,17 @@ struct ContentView: View {
                 emptyState(title: emptyTitle, subtitle: emptySubtitle)
             } else {
                 ScrollView {
-                    HStack(alignment: .top, spacing: ClipboardLayout.columnSpacing) {
-                        ForEach(0..<ClipboardLayout.columnCount, id: \.self) { columnIndex in
-                            LazyVStack(spacing: ClipboardLayout.cardSpacing) {
-                                ForEach(itemsForColumn(items, columnIndex: columnIndex)) { item in
-                                    card(item)
-                                        // Deleting changes modulo-based column assignment; matched geometry
-                                        // carries surviving cards into their new columns instead of snapping.
-                                        .matchedGeometryEffect(id: item.id, in: cardSortNamespace)
-                                        .transition(.scale(scale: 0.94).combined(with: .opacity))
-                                }
-                            }
-                            .frame(maxWidth: .infinity, alignment: .top)
+                    LazyVStack(spacing: ClipboardLayout.rowSpacing) {
+                        ForEach(items) { item in
+                            card(item)
+                                .matchedGeometryEffect(id: item.id, in: cardSortNamespace)
+                                .transition(.scale(scale: 0.94).combined(with: .opacity))
                         }
                     }
                     .padding(ClipboardLayout.contentPadding)
                     .animation(ClipboardLayout.resortAnimation, value: items.map(\.id))
                 }
             }
-        }
-    }
-
-    private func itemsForColumn(_ items: [ClipboardItem], columnIndex: Int) -> [ClipboardItem] {
-        items.enumerated().compactMap { index, item in
-            index % ClipboardLayout.columnCount == columnIndex ? item : nil
         }
     }
 
@@ -298,7 +306,6 @@ private struct ClipboardHistoryCard: View {
     let imageDataProvider: () -> Data?
     let onCopy: () -> Void
     let onDelete: () -> Void
-    @State private var isHovering = false
 
     private var sourceApplicationName: String? {
         guard let name = item.sourceApplicationName, !name.isEmpty else { return nil }
@@ -310,89 +317,79 @@ private struct ClipboardHistoryCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 8) {
-                Group {
-                    if let sourceApplicationName {
-                        Text(sourceApplicationName)
-                    } else {
-                        Text("")
-                    }
-                }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 16) {
+                Text(sourceApplicationName ?? "Unknown App")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
 
-                Spacer(minLength: 0)
-
-                Text(item.createdAt, format: .dateTime.hour().minute())
-                    .font(.caption2)
+                Text(timestamp)
+                    .font(.caption)
                     .foregroundStyle(AppPalette.secondaryText)
                     .lineLimit(1)
+
+                Spacer(minLength: 0)
             }
 
-            Group {
-                if item.isImage {
-                    ClipboardImagePreview(
-                        imageID: item.id,
-                        imageURLProvider: imageURLProvider,
-                        imageDataProvider: imageDataProvider
-                    )
-                } else {
-                    Text(item.text)
-                        .font(.caption)
-                        .foregroundStyle(.primary)
-                        .lineLimit(7)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .top, spacing: 12) {
+                Group {
+                    if item.isImage {
+                        ClipboardImagePreview(
+                            imageID: item.id,
+                            imageURLProvider: imageURLProvider,
+                            imageDataProvider: imageDataProvider
+                        )
+                    } else {
+                        Text(item.text)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .lineLimit(11)
+                            .truncationMode(.tail)
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .overlay(alignment: .center) {
-            HStack(spacing: 8) {
-                HistoryActionButton(
-                    systemName: "doc.on.doc",
-                    help: "Copy",
-                    isEnabled: canUseItem,
-                    action: onCopy
-                )
+                .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                HistoryActionButton(
-                    systemName: "trash",
-                    help: "Delete",
-                    isDestructive: true,
-                    action: onDelete
-                )
+                HStack(spacing: 8) {
+                    HistoryActionButton(
+                        systemName: "doc.on.doc",
+                        background: .blue,
+                        isEnabled: canUseItem,
+                        action: onCopy
+                    )
+
+                    HistoryActionButton(
+                        systemName: "trash",
+                        background: .red,
+                        action: onDelete
+                    )
+                }
+                .frame(width: ClipboardLayout.rowActionWidth, alignment: .trailing)
             }
-            .padding(6)
-            .background(
-                Capsule()
-                    .fill(.ultraThinMaterial)
-                    .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
-            )
-            .opacity(isHovering ? 1 : 0)
-            .scaleEffect(isHovering ? 1 : 0.96)
-            .allowsHitTesting(isHovering)
-            .animation(.easeInOut(duration: 0.12), value: isHovering)
         }
-        .frame(maxWidth: .infinity, maxHeight: ClipboardLayout.cardMaxHeight, alignment: .topLeading)
-        .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: ClipboardLayout.rowMaxHeight, alignment: .topLeading)
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(isHovering ? AppPalette.rowHover : AppPalette.cardBackground)
-                .shadow(color: .black.opacity(isHovering ? 0.16 : 0), radius: 14, x: 0, y: 6)
+                .fill(AppPalette.cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(AppPalette.separator.opacity(0.75), lineWidth: 1)
         )
         .contentShape(Rectangle())
-        .onHover { hovering in
-            withAnimation(.easeInOut(duration: 0.14)) {
-                isHovering = hovering
-            }
-        }
     }
+
+    private var timestamp: String {
+        Self.timestampFormatter.string(from: item.createdAt)
+    }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy/MM/dd HH:mm:ss"
+        return formatter
+    }()
 }
 
 private struct ClipboardImagePreview: View {
@@ -412,13 +409,14 @@ private struct ClipboardImagePreview: View {
             if let thumbnail {
                 Image(nsImage: thumbnail)
                     .resizable()
-                    .scaledToFill()
+                    .scaledToFit()
             } else {
                 Image(systemName: "photo")
                     .foregroundStyle(AppPalette.secondaryText)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: 92)
+        .frame(maxWidth: .infinity, maxHeight: 230, alignment: .leading)
+        .background(Color.white.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .onAppear {
             thumbnail = makeThumbnail()
@@ -468,7 +466,7 @@ private enum ClipboardImageThumbnail {
             return nil
         }
 
-        return NSImage(cgImage: image, size: NSSize(width: 38, height: 38))
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
     static func make(from data: Data) -> NSImage? {
@@ -479,7 +477,7 @@ private enum ClipboardImageThumbnail {
             return nil
         }
 
-        return NSImage(cgImage: image, size: NSSize(width: 38, height: 38))
+        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 
     static func memoryCost(for image: NSImage) -> Int {
@@ -506,8 +504,7 @@ private enum ClipboardImageThumbnail {
 
 private struct HistoryActionButton: View {
     let systemName: String
-    let help: String
-    var isDestructive = false
+    let background: Color
     var isEnabled = true
     let action: () -> Void
 
@@ -516,16 +513,16 @@ private struct HistoryActionButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(isDestructive ? Color.red.opacity(0.9) : Color.primary.opacity(0.78))
-                .frame(width: 28, height: 28)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(isHovering && isEnabled ? .white : background)
+                .frame(width: 34, height: 30, alignment: .center)
                 .background(
-                    RoundedRectangle(cornerRadius: 7)
-                        .fill(hoverBackground)
+                    Capsule()
+                        .fill(isHovering && isEnabled ? background.opacity(0.92) : .clear)
                 )
         }
         .buttonStyle(.plain)
-        .help(help)
+        .help(systemName == "trash" ? "Delete" : "Copy")
         .disabled(!isEnabled)
         .opacity(isEnabled ? 1 : 0.35)
         .onHover { hovering in
@@ -533,10 +530,5 @@ private struct HistoryActionButton: View {
                 isHovering = hovering
             }
         }
-    }
-
-    private var hoverBackground: Color {
-        guard isHovering && isEnabled else { return .clear }
-        return isDestructive ? AppPalette.destructiveHover : AppPalette.buttonHover
     }
 }

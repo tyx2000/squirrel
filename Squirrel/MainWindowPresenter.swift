@@ -1,6 +1,7 @@
 // Purpose: Creates, presents, animates, and releases the clipboard management window on demand.
 
 import AppKit
+import ApplicationServices
 import Foundation
 import QuartzCore
 import SwiftUI
@@ -14,6 +15,10 @@ final class MainWindowPresenter {
     private var shouldShowWhenAvailable = false
     private var isHiding = false
     private var pendingClipboardPromotion: ClipboardItem?
+    private var localDismissMonitor: Any?
+    private var globalDismissMonitor: Any?
+    private var escapeEventTap: CFMachPort?
+    private var escapeEventTapSource: CFRunLoopSource?
     private let animationDuration: TimeInterval = 0.16
     private let windowSize = NSSize(width: 720, height: 480)
 
@@ -23,6 +28,21 @@ final class MainWindowPresenter {
         self.services = services
 
         if shouldShowWhenAvailable {
+            showClipboardWindow()
+        }
+    }
+
+    func toggleClipboardWindow() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.toggleClipboardWindow()
+            }
+            return
+        }
+
+        if let window, window.isVisible, !isHiding {
+            hideClipboardWindow(window)
+        } else {
             showClipboardWindow()
         }
     }
@@ -48,6 +68,7 @@ final class MainWindowPresenter {
         }
 
         configureWindow(window)
+        window.setFrame(centeredFrame(), display: false)
         let targetFrame = window.frame
         let shouldAnimate = !window.isVisible || window.alphaValue < 1
 
@@ -60,6 +81,7 @@ final class MainWindowPresenter {
         NSApp.activate(ignoringOtherApps: true)
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+        installDismissEventMonitors(for: window)
 
         if shouldAnimate {
             animate(window: window, toAlpha: 1, frame: targetFrame)
@@ -119,6 +141,7 @@ final class MainWindowPresenter {
             if self.window === window {
                 self.window = nil
             }
+            self.removeDismissEventMonitors()
             self.isHiding = false
             self.promotePendingClipboardItem()
         }
@@ -154,6 +177,10 @@ final class MainWindowPresenter {
     }
 
     private func initialFrame() -> NSRect {
+        centeredFrame()
+    }
+
+    private func centeredFrame() -> NSRect {
         let visibleFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
         return NSRect(
             x: visibleFrame.midX - windowSize.width / 2,
@@ -191,6 +218,111 @@ final class MainWindowPresenter {
             window.animator().alphaValue = alpha
             window.animator().setFrame(frame, display: true)
         }
+    }
+
+    private func installDismissEventMonitors(for window: NSWindow) {
+        removeDismissEventMonitors()
+
+        localDismissMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .leftMouseDown, .rightMouseDown]
+        ) { [weak self, weak window] event in
+            guard let self, let window else { return event }
+
+            if event.type == .keyDown, event.keyCode == 53 {
+                NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
+                self.hideClipboardWindow(window)
+                return nil
+            }
+
+            guard event.type == .leftMouseDown || event.type == .rightMouseDown else {
+                return event
+            }
+
+            if event.window !== window {
+                self.hideClipboardWindow(window)
+                return event
+            }
+
+            guard let contentView = window.contentView else {
+                self.hideClipboardWindow(window)
+                return event
+            }
+
+            let location = contentView.convert(event.locationInWindow, from: nil)
+            if !contentView.bounds.contains(location) {
+                self.hideClipboardWindow(window)
+            }
+
+            return event
+        }
+
+        globalDismissMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]
+        ) { [weak self, weak window] _ in
+            guard let self, let window else { return }
+            self.hideClipboardWindow(window)
+        }
+
+        installEscapeEventTap()
+    }
+
+    private func removeDismissEventMonitors() {
+        if let localDismissMonitor {
+            NSEvent.removeMonitor(localDismissMonitor)
+            self.localDismissMonitor = nil
+        }
+
+        if let globalDismissMonitor {
+            NSEvent.removeMonitor(globalDismissMonitor)
+            self.globalDismissMonitor = nil
+        }
+
+        if let escapeEventTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), escapeEventTapSource, .commonModes)
+            self.escapeEventTapSource = nil
+        }
+
+        if let escapeEventTap {
+            CFMachPortInvalidate(escapeEventTap)
+            self.escapeEventTap = nil
+        }
+    }
+
+    private func installEscapeEventTap() {
+        guard AXIsProcessTrusted() else { return }
+
+        let eventMask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let callback: CGEventTapCallBack = { _, type, event, _ in
+            guard type == .keyDown,
+                  event.getIntegerValueField(.keyboardEventKeycode) == 53 else {
+                return Unmanaged.passUnretained(event)
+            }
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
+                MainWindowPresenter.shared.hideClipboardWindow()
+            }
+
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard let eventTap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: eventMask,
+            callback: callback,
+            userInfo: nil
+        ) else {
+            return
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+
+        escapeEventTap = eventTap
+        escapeEventTapSource = source
     }
 }
 
