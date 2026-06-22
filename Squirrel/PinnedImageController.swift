@@ -6,8 +6,20 @@ import Foundation
 @MainActor
 final class PinnedImageController {
     private var windows: [PinnedImageWindow] = []
+    private let maxPinnedImages = 5
 
-    func pin(image: CGImage, screen: NSScreen, selectionRect: CGRect) {
+    /// Pins an image as a floating window. Returns the new pinned-image count,
+    /// or nil if eviction occurred (the returned count is post-eviction, pre-append).
+    @discardableResult
+    func pin(image: CGImage, screen: NSScreen, selectionRect: CGRect) -> (didEvict: Bool, count: Int) {
+        var didEvict = false
+
+        // Evict oldest if at the cap so memory stays bounded.
+        if windows.count >= maxPinnedImages, let oldest = windows.first {
+            oldest.close() // Triggers onClose → removes from array
+            didEvict = true
+        }
+
         let windowSize = displaySize(for: selectionRect.size)
         let frame = CGRect(
             x: screen.frame.minX + selectionRect.minX,
@@ -22,6 +34,7 @@ final class PinnedImageController {
         }
         windows.append(window)
         window.orderFrontRegardless()
+        return (didEvict, windows.count)
     }
 
     private func displaySize(for pointSize: CGSize) -> CGSize {

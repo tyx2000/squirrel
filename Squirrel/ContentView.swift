@@ -48,8 +48,8 @@ private enum ClipboardLayout {
     static let rowSpacing: CGFloat = 10
     static let rowMaxHeight: CGFloat = 300
     static let rowActionWidth: CGFloat = 82
-    static let thumbnailCacheLimit = 8 * 1024 * 1024
-    static let thumbnailCacheCountLimit = 50
+    static let thumbnailCacheLimit = 4 * 1024 * 1024
+    static let thumbnailCacheCountLimit = 24
     static let resortAnimation = Animation.spring(response: 0.28, dampingFraction: 0.88)
 
     static func configureThumbnailCache() {
@@ -464,11 +464,13 @@ private struct ClipboardImagePreview: View {
 
         var result: NSImage? = nil
 
-        if let imageURL = imageURLProvider(),
-           let thumbnail = ClipboardImageThumbnail.make(from: imageURL) {
-            result = thumbnail
-        } else if let imageData = imageDataProvider() {
-            result = ClipboardImageThumbnail.make(from: imageData)
+        autoreleasepool {
+            if let imageURL = imageURLProvider(),
+               let thumbnail = ClipboardImageThumbnail.make(from: imageURL) {
+                result = thumbnail
+            } else if let imageData = imageDataProvider() {
+                result = ClipboardImageThumbnail.make(from: imageData)
+            }
         }
 
         if let result {
@@ -507,6 +509,8 @@ private enum ClipboardImageThumbnail {
     }
 
     static func memoryCost(for image: NSImage) -> Int {
+        // NSCache cost should reflect the largest single representation,
+        // not the sum — the cache evicts whole entries, not individual reps.
         let representationCost = image.representations
             .map { max($0.pixelsWide, 1) * max($0.pixelsHigh, 1) * 4 }
             .max()

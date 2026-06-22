@@ -4,6 +4,7 @@ import AppKit
 import Combine
 import CryptoKit
 import Foundation
+import ImageIO
 import os.log
 
 @MainActor
@@ -75,14 +76,16 @@ final class ClipboardHistoryStore: ObservableObject {
         let changeCount = pasteboard.changeCount
         guard changeCount != lastChangeCount else { return }
 
-        lastChangeCount = changeCount
         let sourceApplicationName = currentSourceApplicationName()
         if let imageData = imageDataFromPasteboard() {
             addImageData(imageData, sourceApplicationName: sourceApplicationName, at: now)
+            lastChangeCount = changeCount
         } else if let text = pasteboard.string(forType: .string) {
             addText(text, sourceApplicationName: sourceApplicationName, at: now)
+            lastChangeCount = changeCount
         } else {
             pruneHistory(now: now)
+            lastChangeCount = changeCount
         }
     }
 
@@ -102,23 +105,50 @@ final class ClipboardHistoryStore: ObservableObject {
         save()
     }
 
-    func addImageData(_ imageData: Data, sourceApplicationName: String? = nil, at date: Date = Date()) {
-        guard !imageData.isEmpty else { return }
+    @discardableResult
+    func addImageData(_ imageData: Data, sourceApplicationName: String? = nil, at date: Date = Date()) -> Bool {
+        guard !imageData.isEmpty else { return false }
         guard imageData.count <= Self.maxImageDataByteCount else {
             lastError = "Image too large (max 50MB)"
-            return
+            return false
         }
 
-        removeImageItemsMatching(imageData)
+        guard let pixelCount = Self.imagePixelCount(forImageData: imageData) else {
+            lastError = "Could not read image dimensions."
+            return false
+        }
+        guard pixelCount <= Self.maxImagePixelCount else {
+            lastError = "Image too large (max 16MP)"
+            return false
+        }
 
         let id = UUID()
-        let fileName = storeImageData(imageData, id: id)
+
+        // Always persist to disk — never hold large image Data inline in the items array.
+        // Retry once on failure for transient I/O issues.
+        var fileName = storeImageData(imageData, id: id)
+        if fileName == nil {
+            fileName = storeImageData(imageData, id: id)
+        }
+
+        guard let fileName else {
+            lastError = "Failed to store clipboard image to disk."
+            return false
+        }
+
+        // Compute fingerprint once and pass it through so removeImageItemsMatching
+        // doesn't re-hash the same Data.
         let fingerprint = Self.imageFingerprint(for: imageData)
+
+        // Only dedup after the disk write succeeds — otherwise we'd delete
+        // existing items and then fail to add the replacement, losing data.
+        removeImageItemsMatching(imageData, knownFingerprint: fingerprint)
+
         items.insert(
             ClipboardItem(
                 id: id,
                 text: "Image",
-                imageData: fileName == nil ? imageData : nil,
+                imageData: nil,
                 imageFileName: fileName,
                 imageFingerprint: fingerprint,
                 sourceApplicationName: sourceApplicationName,
@@ -128,6 +158,7 @@ final class ClipboardHistoryStore: ObservableObject {
         )
         pruneHistory(now: date)
         save()
+        return true
     }
 
     func delete(_ item: ClipboardItem) {
@@ -291,8 +322,8 @@ final class ClipboardHistoryStore: ObservableObject {
         }
     }
 
-    private func removeImageItemsMatching(_ imageData: Data) {
-        let fingerprint = Self.imageFingerprint(for: imageData)
+    private func removeImageItemsMatching(_ imageData: Data, knownFingerprint: String? = nil) {
+        let fingerprint = knownFingerprint ?? Self.imageFingerprint(for: imageData)
         let duplicates = items.filter { item in
             guard item.isImage else { return false }
             if item.imageFingerprint == fingerprint {
@@ -354,6 +385,7 @@ final class ClipboardHistoryStore: ObservableObject {
     }
 
     private func imageDataFromPasteboard() -> Data? {
+        // Try PNG and TIFF representations first — addImageData validates pixel limits.
         if let pngData = pasteboard.data(forType: .png), !pngData.isEmpty {
             return pngData
         }
@@ -362,6 +394,7 @@ final class ClipboardHistoryStore: ObservableObject {
             return tiffData
         }
 
+        // Fallback: read NSImage from pasteboard and convert to TIFF.
         guard let image = pasteboard.readObjects(forClasses: [NSImage.self])?.first as? NSImage else {
             return nil
         }
@@ -386,6 +419,23 @@ final class ClipboardHistoryStore: ObservableObject {
         }
 
         return max(Int(image.size.width), 1) * max(Int(image.size.height), 1)
+    }
+
+    private static func imagePixelCount(forImageData imageData: Data) -> Int? {
+        guard let source = CGImageSourceCreateWithData(imageData as CFData, [
+            kCGImageSourceShouldCache: false
+        ] as CFDictionary),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, [
+                kCGImageSourceShouldCache: false
+              ] as CFDictionary) as? [CFString: Any] else {
+            return nil
+        }
+
+        guard let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue else {
+            return nil
+        }
+        return max(width, 1) * max(height, 1)
     }
 
     private static func imageFingerprint(for imageData: Data) -> String {

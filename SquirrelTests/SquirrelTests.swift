@@ -77,14 +77,33 @@ struct SquirrelTests {
         #expect(pasteboard.string(forType: .string) == "first")
     }
 
-    @Test func clipboardHistoryStoresImageData() async throws {
+    @Test func clipboardHistoryStoresImageDataOnDiskNotInline() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = directory.appendingPathComponent("clipboard-history.json")
+        let imageData = try #require(Self.testImageData())
+
+        let store = ClipboardHistoryStore(storageURL: storageURL)
+        store.addImageData(imageData, at: Date())
+
+        // Image data is always persisted to disk — never held inline in the item.
+        #expect(store.items.first?.isImage == true)
+        #expect(store.items.first?.imageData == nil)
+        #expect(store.items.first?.imageFileName != nil)
+        #expect(store.imageData(for: store.items.first!) == imageData)
+
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    @Test func clipboardHistoryRejectsImageDataWhenDiskStorageUnavailable() async throws {
+        // storageURL: nil → no disk backing → image storage must fail gracefully.
         let store = ClipboardHistoryStore(storageURL: nil)
         let imageData = try #require(Self.testImageData())
 
         store.addImageData(imageData, at: Date())
 
-        #expect(store.items.first?.isImage == true)
-        #expect(store.items.first?.imageData == imageData)
+        #expect(store.items.isEmpty)
+        #expect(store.lastError == "Failed to store clipboard image to disk.")
     }
 
     @Test func clipboardHistoryPersistsImageDataOutsideItemMemory() async throws {
@@ -176,8 +195,11 @@ struct SquirrelTests {
     }
 
     @Test func copyingImageItemPromotesItAndWritesPasteboardImage() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = directory.appendingPathComponent("clipboard-history.json")
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
-        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: storageURL)
         let firstImageData = try #require(Self.testImageData(color: .red))
         let secondImageData = try #require(Self.testImageData(color: .blue))
 
@@ -187,8 +209,11 @@ struct SquirrelTests {
 
         store.copyToPasteboardAndPromote(item)
 
-        #expect(store.items.first?.imageData == firstImageData)
+        // Image data is always on disk — use imageData(for:) to read it back.
+        #expect(store.imageData(for: store.items.first!) == firstImageData)
         #expect(pasteboard.readObjects(forClasses: [NSImage.self])?.first is NSImage)
+
+        try? FileManager.default.removeItem(at: directory)
     }
 
     @Test func captureCropRectConvertsSelectionPointsToSnapshotPixels() async throws {

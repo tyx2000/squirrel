@@ -161,7 +161,7 @@ final class ScreenRecordingService: ObservableObject {
         configuration.width = max(1, Int(contentSize.width * scale))
         configuration.height = max(1, Int(contentSize.height * scale))
         configuration.minimumFrameInterval = CMTime(value: 1, timescale: 60)
-        configuration.queueDepth = 6
+        configuration.queueDepth = 3
         configuration.showsCursor = true
         configuration.showMouseClicks = true
         configuration.scalesToFit = false

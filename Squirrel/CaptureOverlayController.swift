@@ -18,6 +18,8 @@ struct CaptureAnnotation {
 struct CaptureScreenSnapshot {
     var displayID: CGDirectDisplayID
     var image: CGImage
+    /// Full-resolution image retained only until the crop is complete, then nil'd to free memory.
+    var fullResImage: CGImage?
     var pointSize: CGSize
 }
 

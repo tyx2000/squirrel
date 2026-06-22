@@ -127,20 +127,34 @@ final class ScreenCaptureService: ObservableObject {
         annotations: [CaptureAnnotation],
         onFailure: @escaping (String) -> Void
     ) {
-        guard let image = Self.croppedImage(from: snapshot, selectionRect: localSelectionRect) else {
+        // Use the full-resolution image for pixel-perfect cropping, then release it.
+        let cropSource = snapshot.fullResImage ?? snapshot.image
+
+        guard let image = Self.croppedImage(from: cropSource, snapshotPointSize: snapshot.pointSize, selectionRect: localSelectionRect) else {
             fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
             return
         }
 
-        let outputImage = Self.compositedImage(
-            baseImage: image,
-            annotations: annotations,
-            selectionRect: localSelectionRect
-        )
+        // croppedImage already returns a detached copy, so `image` is independent.
+        // compositedImage reads (doesn't mutate) its input, so no second detach needed.
+        let outputImage: CGImage
+        if annotations.isEmpty {
+            outputImage = image
+        } else {
+            outputImage = Self.compositedImage(
+                baseImage: image,
+                annotations: annotations,
+                selectionRect: localSelectionRect
+            )
+        }
 
         if action == .pin {
-            pinnedImageController.pin(image: outputImage, screen: screen, selectionRect: localSelectionRect)
-            lastMessage = nil
+            let result = pinnedImageController.pin(image: outputImage, screen: screen, selectionRect: localSelectionRect)
+            if result.didEvict {
+                lastMessage = "Pinned images capped at 5 — oldest pin removed (\(result.count) remaining)."
+            } else {
+                lastMessage = nil
+            }
             return
         }
 
@@ -150,8 +164,11 @@ final class ScreenCaptureService: ObservableObject {
         }
 
         clipboardStore.setPasteboardImageData(pngData)
-        clipboardStore.addImageData(pngData, sourceApplicationName: "Screenshot")
-        lastMessage = nil
+        if clipboardStore.addImageData(pngData, sourceApplicationName: "Screenshot") {
+            lastMessage = nil
+        } else {
+            lastMessage = clipboardStore.lastError ?? "Screenshot was not saved to history."
+        }
     }
 
     private static func captureSnapshots(for screens: [NSScreen]) async throws -> [CGDirectDisplayID: CaptureScreenSnapshot] {
@@ -167,15 +184,44 @@ final class ScreenCaptureService: ObservableObject {
                 screen: screen,
                 displayID: displayID
             )
-            let image = try await captureImage(in: captureRect)
+            let fullResImage = try await captureImage(in: captureRect)
+
+            // Downscale to point-size for overlay display — keeps ~90% less RAM
+            // while the user selects/annotates. The full-res image is retained
+            // only until the crop is complete.
+            let displayImage = downscaleToPointSize(fullResImage, pointSize: screen.frame.size) ?? fullResImage
             snapshotsByDisplayID[displayID] = CaptureScreenSnapshot(
                 displayID: displayID,
-                image: image,
+                image: displayImage,
+                fullResImage: fullResImage,
                 pointSize: screen.frame.size
             )
         }
 
         return snapshotsByDisplayID
+    }
+
+    /// Downscales a Retina CGImage to point-size resolution for overlay display.
+    private static func downscaleToPointSize(_ image: CGImage, pointSize: CGSize) -> CGImage? {
+        let targetWidth = Int(pointSize.width)
+        let targetHeight = Int(pointSize.height)
+        guard targetWidth > 0, targetHeight > 0,
+              targetWidth < image.width || targetHeight < image.height else {
+            return nil // Already at or below point-size; no downscale needed
+        }
+
+        guard let context = CGContext(
+            data: nil,
+            width: targetWidth,
+            height: targetHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.draw(image, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
+        return context.makeImage()
     }
 
     private static func displaySpaceRect(for localRect: CGRect, screen: NSScreen, displayID: CGDirectDisplayID) -> CGRect {
@@ -203,14 +249,14 @@ final class ScreenCaptureService: ObservableObject {
         ).integral
     }
 
-    private static func croppedImage(from snapshot: CaptureScreenSnapshot, selectionRect: CGRect) -> CGImage? {
+    private static func croppedImage(from source: CGImage, snapshotPointSize: CGSize, selectionRect: CGRect) -> CGImage? {
         let cropRect = pixelCropRect(
             for: selectionRect,
-            snapshotPointSize: snapshot.pointSize,
-            snapshotPixelSize: CGSize(width: snapshot.image.width, height: snapshot.image.height)
+            snapshotPointSize: snapshotPointSize,
+            snapshotPixelSize: CGSize(width: source.width, height: source.height)
         )
         guard cropRect.width >= 1, cropRect.height >= 1 else { return nil }
-        guard let croppedImage = snapshot.image.cropping(to: cropRect) else { return nil }
+        guard let croppedImage = source.cropping(to: cropRect) else { return nil }
         return detachedCopy(of: croppedImage)
     }
 
