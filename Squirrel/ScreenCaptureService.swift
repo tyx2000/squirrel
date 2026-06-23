@@ -185,43 +185,15 @@ final class ScreenCaptureService: ObservableObject {
                 displayID: displayID
             )
             let fullResImage = try await captureImage(in: captureRect)
-
-            // Downscale to point-size for overlay display — keeps ~90% less RAM
-            // while the user selects/annotates. The full-res image is retained
-            // only until the crop is complete.
-            let displayImage = downscaleToPointSize(fullResImage, pointSize: screen.frame.size) ?? fullResImage
             snapshotsByDisplayID[displayID] = CaptureScreenSnapshot(
                 displayID: displayID,
-                image: displayImage,
+                image: fullResImage,
                 fullResImage: fullResImage,
                 pointSize: screen.frame.size
             )
         }
 
         return snapshotsByDisplayID
-    }
-
-    /// Downscales a Retina CGImage to point-size resolution for overlay display.
-    private static func downscaleToPointSize(_ image: CGImage, pointSize: CGSize) -> CGImage? {
-        let targetWidth = Int(pointSize.width)
-        let targetHeight = Int(pointSize.height)
-        guard targetWidth > 0, targetHeight > 0,
-              targetWidth < image.width || targetHeight < image.height else {
-            return nil // Already at or below point-size; no downscale needed
-        }
-
-        guard let context = CGContext(
-            data: nil,
-            width: targetWidth,
-            height: targetHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        context.draw(image, in: CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight))
-        return context.makeImage()
     }
 
     private static func displaySpaceRect(for localRect: CGRect, screen: NSScreen, displayID: CGDirectDisplayID) -> CGRect {
