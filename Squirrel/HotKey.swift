@@ -9,6 +9,9 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
     case leftHalf
     case rightHalf
     case centerHalf
+    case moveLeft
+    case moveCenter
+    case moveRight
     case lockScreen
     case captureArea
     case recordWindow
@@ -21,6 +24,9 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
         case .leftHalf: "Window Left Two Thirds"
         case .rightHalf: "Window Right Two Thirds"
         case .centerHalf: "Window Center Two Thirds"
+        case .moveLeft: "Left"
+        case .moveCenter: "Center"
+        case .moveRight: "Right"
         case .lockScreen: "Lock Screen"
         case .captureArea: "Capture Area"
         case .recordWindow: "Record Screen"
@@ -33,11 +39,30 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
         case .leftHalf: 2
         case .rightHalf: 3
         case .centerHalf: 4
-        case .lockScreen: 5
-        case .captureArea: 6
-        case .recordWindow: 7
+        case .moveLeft: 5
+        case .moveCenter: 6
+        case .moveRight: 7
+        case .lockScreen: 8
+        case .captureArea: 9
+        case .recordWindow: 10
         }
     }
+
+    static let standaloneCommands: [HotKeyCommand] = [
+        .clipboardWindow,
+        .leftHalf,
+        .rightHalf,
+        .centerHalf,
+        .lockScreen,
+        .captureArea,
+        .recordWindow
+    ]
+
+    static let moveCommands: [HotKeyCommand] = [
+        .moveLeft,
+        .moveCenter,
+        .moveRight
+    ]
 }
 
 struct HotKeyCombo: Codable, Hashable {
@@ -49,6 +74,9 @@ struct HotKeyCombo: Codable, Hashable {
         .leftHalf: HotKeyCombo(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .rightHalf: HotKeyCombo(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .centerHalf: HotKeyCombo(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
+        .moveLeft: HotKeyCombo(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey | shiftKey)),
+        .moveCenter: HotKeyCombo(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(controlKey | optionKey | shiftKey)),
+        .moveRight: HotKeyCombo(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey | shiftKey)),
         .lockScreen: HotKeyCombo(keyCode: UInt32(kVK_ANSI_L), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .captureArea: HotKeyCombo(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .recordWindow: HotKeyCombo(keyCode: UInt32(kVK_ANSI_R), modifiers: UInt32(controlKey | optionKey | cmdKey))

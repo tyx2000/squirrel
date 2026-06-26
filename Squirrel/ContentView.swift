@@ -224,7 +224,7 @@ struct ContentView: View {
     private var shortcutsView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                ForEach(HotKeyCommand.allCases) { command in
+                ForEach(HotKeyCommand.standaloneCommands) { command in
                     ShortcutRecorderView(
                         title: command.title,
                         shortcut: Binding(
@@ -234,6 +234,18 @@ struct ContentView: View {
                     )
                     .padding(.vertical, 1)
                 }
+
+                ShortcutRecorderGroupView(
+                    title: "Move Window",
+                    commands: HotKeyCommand.moveCommands,
+                    shortcut: { command in
+                        Binding(
+                            get: { hotKeyManager.shortcut(for: command) },
+                            set: { hotKeyManager.updateShortcut($0, for: command) }
+                        )
+                    }
+                )
+                .padding(.vertical, 1)
 
                 Divider()
                     .overlay(AppPalette.separator)
@@ -324,6 +336,25 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+}
+
+private struct ShortcutRecorderGroupView: View {
+    let title: String
+    let commands: [HotKeyCommand]
+    let shortcut: (HotKeyCommand) -> Binding<HotKeyCombo>
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+            Spacer(minLength: 12)
+            ForEach(commands) { command in
+                CompactShortcutRecorderView(
+                    title: command.title,
+                    shortcut: shortcut(command)
+                )
+            }
+        }
+    }
 }
 
 private struct ClipboardHistoryCard: View {

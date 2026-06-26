@@ -56,6 +56,61 @@ struct ShortcutRecorderView: View {
     }
 }
 
+struct CompactShortcutRecorderView: View {
+    @EnvironmentObject private var hotKeyManager: HotKeyManager
+
+    let title: String
+    @Binding var shortcut: HotKeyCombo
+
+    @State private var isRecording = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button(isRecording ? "Press New Shortcut" : shortcut.displayString) {
+                startRecording()
+            }
+            .buttonStyle(.bordered)
+            .monospaced()
+            .background {
+                if isRecording {
+                    KeyCaptureView { combo in
+                        shortcut = combo
+                        finishRecording()
+                    }
+                    .frame(width: 1, height: 1)
+                }
+            }
+        }
+        .onDisappear {
+            cancelRecording()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cancelShortcutRecording)) { _ in
+            cancelRecording()
+        }
+    }
+
+    private func startRecording() {
+        guard !isRecording else { return }
+        hotKeyManager.suspendHotKeys()
+        isRecording = true
+    }
+
+    private func finishRecording() {
+        guard isRecording else { return }
+        isRecording = false
+        hotKeyManager.resumeHotKeys()
+    }
+
+    private func cancelRecording() {
+        guard isRecording else { return }
+        isRecording = false
+        hotKeyManager.resumeHotKeys()
+    }
+}
+
 private struct KeyCaptureView: NSViewRepresentable {
     let onCapture: (HotKeyCombo) -> Void
 

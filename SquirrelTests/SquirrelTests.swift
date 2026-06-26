@@ -194,6 +194,22 @@ struct SquirrelTests {
         #expect(WindowLayoutCalculator.targetFrame(for: .leftHalf, in: visibleFrame).width == 666)
     }
 
+    @Test func windowMovePreservesCurrentWindowSize() async throws {
+        let visibleFrame = CGRect(x: 10, y: 20, width: 900, height: 600)
+        let currentFrame = CGRect(x: 120, y: 180, width: 320, height: 240)
+
+        #expect(WindowLayoutCalculator.targetFrame(for: .left, currentFrame: currentFrame, in: visibleFrame) == CGRect(x: 10, y: 180, width: 320, height: 240))
+        #expect(WindowLayoutCalculator.targetFrame(for: .center, currentFrame: currentFrame, in: visibleFrame) == CGRect(x: 300, y: 180, width: 320, height: 240))
+        #expect(WindowLayoutCalculator.targetFrame(for: .right, currentFrame: currentFrame, in: visibleFrame) == CGRect(x: 590, y: 180, width: 320, height: 240))
+    }
+
+    @Test func windowMoveClampsVerticalPositionInsideVisibleFrame() async throws {
+        let visibleFrame = CGRect(x: 0, y: 50, width: 800, height: 500)
+        let currentFrame = CGRect(x: 120, y: 10, width: 300, height: 200)
+
+        #expect(WindowLayoutCalculator.targetFrame(for: .left, currentFrame: currentFrame, in: visibleFrame).minY == 50)
+    }
+
     @Test func copyingImageItemPromotesItAndWritesPasteboardImage() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -322,6 +338,9 @@ struct SquirrelTests {
         #expect(shortcuts[.clipboardWindow] == customClipboardShortcut)
         #expect(shortcuts[.recordWindow] == HotKeyCombo.defaultShortcuts[.recordWindow])
         #expect(shortcuts[.lockScreen] == HotKeyCombo.defaultShortcuts[.lockScreen])
+        #expect(shortcuts[.moveLeft] == HotKeyCombo.defaultShortcuts[.moveLeft])
+        #expect(shortcuts[.moveCenter] == HotKeyCombo.defaultShortcuts[.moveCenter])
+        #expect(shortcuts[.moveRight] == HotKeyCombo.defaultShortcuts[.moveRight])
     }
 
     private static func testImageData(color: NSColor = .red) -> Data? {

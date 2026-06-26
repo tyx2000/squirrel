@@ -43,6 +43,18 @@ final class AppServices: ObservableObject {
             windowManager.apply(.centerHalf)
         }
 
+        hotKeyManager.setAction(.moveLeft) { [windowManager] in
+            windowManager.move(.left)
+        }
+
+        hotKeyManager.setAction(.moveCenter) { [windowManager] in
+            windowManager.move(.center)
+        }
+
+        hotKeyManager.setAction(.moveRight) { [windowManager] in
+            windowManager.move(.right)
+        }
+
         hotKeyManager.setAction(.lockScreen) { [weak self, weak hotKeyManager] in
             let requestID = UUID()
             self?.latestLockScreenRequestID = requestID

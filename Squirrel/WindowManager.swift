@@ -11,6 +11,12 @@ enum WindowLayoutMode: String {
     case centerHalf
 }
 
+enum WindowMovePosition: String {
+    case left
+    case center
+    case right
+}
+
 final class WindowManager: ObservableObject {
     @Published private(set) var lastMessage: String?
     @Published private(set) var isAccessibilityTrusted = AXIsProcessTrusted()
@@ -93,6 +99,48 @@ final class WindowManager: ObservableObject {
             lastMessage = "Applied \(mode.title) to \(application.localizedName ?? "current app")."
         } else {
             lastMessage = "\(application.localizedName ?? "The current app") does not allow adjusting this window (size: \(result.sizeStatus.rawValue), position: \(result.positionStatus.rawValue))."
+        }
+    }
+
+    func move(_ position: WindowMovePosition) {
+        refreshAccessibilityTrust()
+
+        guard isAccessibilityTrusted else {
+            updateAccessibilityMessageIfNeeded()
+            return
+        }
+
+        guard let application = targetApplication() else {
+            lastMessage = "No frontmost app was found."
+            return
+        }
+
+        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        guard let window = focusedWindow(in: appElement) else {
+            lastMessage = "The current app has no adjustable front window."
+            return
+        }
+
+        guard let screen = screen(for: window) ?? NSScreen.main,
+              let currentFrame = appKitFrame(of: window) else {
+            lastMessage = "No available screen was found."
+            return
+        }
+
+        let targetFrame = WindowLayoutCalculator.targetFrame(
+            for: position,
+            currentFrame: currentFrame,
+            in: screen.visibleFrame
+        )
+        let axTargetFrame = accessibilityFrame(fromAppKitFrame: targetFrame, on: screen)
+        let result = animatePosition(window: window, to: axTargetFrame.origin) ?? set(
+            window: window,
+            position: axTargetFrame.origin
+        )
+        if result.succeeded {
+            lastMessage = "Moved \(application.localizedName ?? "current app") to \(position.title)."
+        } else {
+            lastMessage = "\(application.localizedName ?? "The current app") does not allow moving this window (position: \(result.positionStatus.rawValue))."
         }
     }
 
@@ -225,12 +273,38 @@ final class WindowManager: ObservableObject {
         return firstResult
     }
 
+    private func animatePosition(window: AXUIElement, to targetOrigin: CGPoint) -> (succeeded: Bool, positionStatus: AXError)? {
+        guard let startFrame = accessibilityFrame(of: window) else { return nil }
+        guard startFrame.origin != targetOrigin else { return nil }
+
+        let firstProgress = 1.0 / Double(layoutAnimationSteps)
+        let firstOrigin = interpolate(from: startFrame.origin, to: targetOrigin, progress: easeOutCubic(firstProgress))
+        let firstResult = set(window: window, position: firstOrigin)
+
+        for step in 2...layoutAnimationSteps {
+            let progress = Double(step) / Double(layoutAnimationSteps)
+            let origin = interpolate(from: startFrame.origin, to: targetOrigin, progress: easeOutCubic(progress))
+            DispatchQueue.main.asyncAfter(deadline: .now() + layoutAnimationDuration * progress) { [weak self] in
+                _ = self?.set(window: window, position: origin)
+            }
+        }
+
+        return firstResult
+    }
+
     private func interpolate(from start: CGRect, to end: CGRect, progress: Double) -> CGRect {
         CGRect(
             x: start.minX + (end.minX - start.minX) * progress,
             y: start.minY + (end.minY - start.minY) * progress,
             width: start.width + (end.width - start.width) * progress,
             height: start.height + (end.height - start.height) * progress
+        )
+    }
+
+    private func interpolate(from start: CGPoint, to end: CGPoint, progress: Double) -> CGPoint {
+        CGPoint(
+            x: start.x + (end.x - start.x) * progress,
+            y: start.y + (end.y - start.y) * progress
         )
     }
 
@@ -273,6 +347,17 @@ final class WindowManager: ObservableObject {
         let positionStatus = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue)
         return (sizeStatus == .success && positionStatus == .success, sizeStatus, positionStatus)
     }
+
+    private func set(window: AXUIElement, position: CGPoint) -> (succeeded: Bool, positionStatus: AXError) {
+        var origin = position
+
+        guard let positionValue = AXValueCreate(.cgPoint, &origin) else {
+            return (false, .failure)
+        }
+
+        let positionStatus = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue)
+        return (positionStatus == .success, positionStatus)
+    }
 }
 
 private extension WindowLayoutMode {
@@ -281,6 +366,16 @@ private extension WindowLayoutMode {
         case .leftHalf: "Left Half"
         case .rightHalf: "Right Half"
         case .centerHalf: "Center Half"
+        }
+    }
+}
+
+private extension WindowMovePosition {
+    var title: String {
+        switch self {
+        case .left: "left"
+        case .center: "center"
+        case .right: "right"
         }
     }
 }
