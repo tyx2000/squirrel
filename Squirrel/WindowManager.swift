@@ -30,6 +30,7 @@ final class WindowManager: ObservableObject {
     private let ownBundleIdentifier = Bundle.main.bundleIdentifier
     private let layoutAnimationDuration: TimeInterval = 0.18
     private let layoutAnimationSteps = 9
+    private static let fullScreenAttribute = "AXFullScreen" as CFString
 
     init() {
         captureCurrentTarget()
@@ -99,6 +100,39 @@ final class WindowManager: ObservableObject {
             lastMessage = "Applied \(mode.title) to \(application.localizedName ?? "current app")."
         } else {
             lastMessage = "\(application.localizedName ?? "The current app") does not allow adjusting this window (size: \(result.sizeStatus.rawValue), position: \(result.positionStatus.rawValue))."
+        }
+    }
+
+    func toggleFullscreen() {
+        refreshAccessibilityTrust()
+
+        guard isAccessibilityTrusted else {
+            updateAccessibilityMessageIfNeeded()
+            return
+        }
+
+        guard let application = targetApplication() else {
+            lastMessage = "No frontmost app was found."
+            return
+        }
+
+        let appElement = AXUIElementCreateApplication(application.processIdentifier)
+        guard let window = focusedWindow(in: appElement) else {
+            lastMessage = "The current app has no adjustable front window."
+            return
+        }
+
+        guard let isFullscreen = fullscreenState(of: window) else {
+            lastMessage = "\(application.localizedName ?? "The current app") does not expose full screen control."
+            return
+        }
+
+        let targetFullscreen = !isFullscreen
+        let result = set(window: window, fullscreen: targetFullscreen)
+        if result == .success {
+            lastMessage = "\(targetFullscreen ? "Entered" : "Exited") full screen for \(application.localizedName ?? "current app")."
+        } else {
+            lastMessage = "\(application.localizedName ?? "The current app") does not allow toggling full screen (\(result.rawValue))."
         }
     }
 
@@ -254,6 +288,17 @@ final class WindowManager: ObservableObject {
         return CGRect(origin: position, size: size)
     }
 
+    private func fullscreenState(of window: AXUIElement) -> Bool? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, Self.fullScreenAttribute, &value) == .success,
+              let value,
+              CFGetTypeID(value) == CFBooleanGetTypeID() else {
+            return nil
+        }
+
+        return CFBooleanGetValue((value as! CFBoolean))
+    }
+
     private func animate(window: AXUIElement, to targetFrame: CGRect) -> (succeeded: Bool, sizeStatus: AXError, positionStatus: AXError)? {
         guard let startFrame = accessibilityFrame(of: window) else { return nil }
         guard startFrame != targetFrame else { return nil }
@@ -357,6 +402,11 @@ final class WindowManager: ObservableObject {
 
         let positionStatus = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue)
         return (positionStatus == .success, positionStatus)
+    }
+
+    private func set(window: AXUIElement, fullscreen: Bool) -> AXError {
+        let value: CFTypeRef = fullscreen ? kCFBooleanTrue : kCFBooleanFalse
+        return AXUIElementSetAttributeValue(window, Self.fullScreenAttribute, value)
     }
 }
 

@@ -43,6 +43,10 @@ final class AppServices: ObservableObject {
             windowManager.apply(.centerHalf)
         }
 
+        hotKeyManager.setAction(.fullscreen) { [windowManager] in
+            windowManager.toggleFullscreen()
+        }
+
         hotKeyManager.setAction(.moveLeft) { [windowManager] in
             windowManager.move(.left)
         }

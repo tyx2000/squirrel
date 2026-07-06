@@ -341,6 +341,13 @@ struct SquirrelTests {
         #expect(shortcuts[.moveLeft] == HotKeyCombo.defaultShortcuts[.moveLeft])
         #expect(shortcuts[.moveCenter] == HotKeyCombo.defaultShortcuts[.moveCenter])
         #expect(shortcuts[.moveRight] == HotKeyCombo.defaultShortcuts[.moveRight])
+        #expect(shortcuts[.fullscreen] == HotKeyCombo.defaultShortcuts[.fullscreen])
+    }
+
+    @Test func hotKeyDefaultsCoverEveryCommandWithUniqueCarbonIDs() async throws {
+        #expect(Set(HotKeyCombo.defaultShortcuts.keys) == Set(HotKeyCommand.allCases))
+        #expect(Set(HotKeyCommand.allCases.map(\.carbonID)).count == HotKeyCommand.allCases.count)
+        #expect(HotKeyCommand.standaloneCommands.contains(.fullscreen))
     }
 
     private static func testImageData(color: NSColor = .red) -> Data? {

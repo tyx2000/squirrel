@@ -9,6 +9,7 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
     case leftHalf
     case rightHalf
     case centerHalf
+    case fullscreen
     case moveLeft
     case moveCenter
     case moveRight
@@ -24,6 +25,7 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
         case .leftHalf: "Window Left Two Thirds"
         case .rightHalf: "Window Right Two Thirds"
         case .centerHalf: "Window Center Two Thirds"
+        case .fullscreen: "Toggle Full Screen"
         case .moveLeft: "Left"
         case .moveCenter: "Center"
         case .moveRight: "Right"
@@ -45,6 +47,7 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
         case .lockScreen: 8
         case .captureArea: 9
         case .recordWindow: 10
+        case .fullscreen: 11
         }
     }
 
@@ -53,6 +56,7 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
         .leftHalf,
         .rightHalf,
         .centerHalf,
+        .fullscreen,
         .lockScreen,
         .captureArea,
         .recordWindow
@@ -74,6 +78,7 @@ struct HotKeyCombo: Codable, Hashable {
         .leftHalf: HotKeyCombo(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .rightHalf: HotKeyCombo(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .centerHalf: HotKeyCombo(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(controlKey | optionKey | cmdKey)),
+        .fullscreen: HotKeyCombo(keyCode: UInt32(kVK_ANSI_F), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         .moveLeft: HotKeyCombo(keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(controlKey | optionKey | shiftKey)),
         .moveCenter: HotKeyCombo(keyCode: UInt32(kVK_DownArrow), modifiers: UInt32(controlKey | optionKey | shiftKey)),
         .moveRight: HotKeyCombo(keyCode: UInt32(kVK_RightArrow), modifiers: UInt32(controlKey | optionKey | shiftKey)),
