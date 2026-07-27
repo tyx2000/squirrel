@@ -56,6 +56,11 @@ private enum MainTab: String, CaseIterable, Identifiable {
     }
 }
 
+private enum WindowControl {
+    case close
+    case minimize
+}
+
 private enum ClipboardLayout {
     static let contentPadding: CGFloat = 14
     static let rowSpacing: CGFloat = 10
@@ -74,6 +79,7 @@ struct ContentView: View {
 
     @State private var selectedTab: MainTab = .history
     @State private var isQuitButtonHovering = false
+    @State private var hoveredWindowControl: WindowControl?
     @Namespace private var cardSortNamespace
 
     var body: some View {
@@ -114,59 +120,96 @@ struct ContentView: View {
     }
 
     private var tabBar: some View {
-        HStack(spacing: 12) {
-            ForEach(MainTab.allCases) { tab in
+        ZStack {
+            windowControls
+
+            HStack(spacing: 12) {
+                ForEach(MainTab.allCases) { tab in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            selectedTab = tab
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: tab.icon)
+                                .frame(width: 16)
+                            Text(tab.title)
+                                .font(AppTypography.bodyMedium)
+                        }
+                        .frame(minWidth: 116)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(selectedTab == tab ? AppPalette.selectedTabBackground : .clear)
+                        )
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+
+            HStack {
+                Spacer(minLength: 0)
                 Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        selectedTab = tab
-                    }
+                    NSApp.terminate(nil)
                 } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: tab.icon)
-                            .frame(width: 16)
-                        Text(tab.title)
-                            .font(AppTypography.bodyMedium)
-                    }
-                    .frame(minWidth: 116)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(selectedTab == tab ? AppPalette.selectedTabBackground : .clear)
-                    )
-                    .contentShape(Rectangle())
+                    Image(systemName: "power")
+                        .font(AppTypography.icon)
+                        .foregroundStyle(isQuitButtonHovering ? .white : .red)
+                        .frame(width: 34, height: 30)
+                        .background(
+                            Capsule()
+                                .fill(isQuitButtonHovering ? Color.red.opacity(0.92) : .clear)
+                        )
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
-            }
-
-            Spacer(minLength: 0)
-
-            Button {
-                NSApp.terminate(nil)
-            } label: {
-                Image(systemName: "power")
-                    .font(AppTypography.icon)
-                    .foregroundStyle(isQuitButtonHovering ? .white : .red)
-                    .frame(width: 34, height: 30)
-                    .background(
-                        Capsule()
-                            .fill(isQuitButtonHovering ? Color.red.opacity(0.92) : .clear)
-                    )
-                    .contentShape(Capsule())
-            }
-            .buttonStyle(.plain)
-            .help("Quit")
-            .onHover { hovering in
-                withAnimation(.easeInOut(duration: 0.12)) {
-                    isQuitButtonHovering = hovering
+                .help("Quit")
+                .onHover { hovering in
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        isQuitButtonHovering = hovering
+                    }
                 }
             }
+            .padding(.trailing, 18)
         }
-        .padding(.leading, 82)
-        .padding(.trailing, 18)
         .frame(height: 56)
         .background(AppPalette.topBarBackground)
+    }
+
+    private var windowControls: some View {
+        HStack(spacing: 12) {
+            WindowControlButton(
+                control: .close,
+                isHovering: hoveredWindowControl == .close,
+                action: closeWindow
+            )
+            .onHover { hovering in
+                hoveredWindowControl = hovering ? .close : nil
+            }
+
+            WindowControlButton(
+                control: .minimize,
+                isHovering: hoveredWindowControl == .minimize,
+                action: minimizeWindow
+            )
+            .onHover { hovering in
+                hoveredWindowControl = hovering ? .minimize : nil
+            }
+        }
+        .padding(.leading, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func closeWindow() {
+        NSApp.keyWindow?.close()
+    }
+
+    private func minimizeWindow() {
+        NSApp.keyWindow?.miniaturize(nil)
     }
 
     @ViewBuilder
@@ -687,6 +730,62 @@ private struct ClipboardImagePreview: View {
 
             return nil
         }
+    }
+}
+
+private struct WindowControlButton: View {
+    let control: WindowControl
+    let isHovering: Bool
+    let action: () -> Void
+
+    private var color: Color {
+        switch control {
+        case .close:
+            Color(red: 1.0, green: 0.376, blue: 0.376)
+        case .minimize:
+            Color(red: 1.0, green: 0.741, blue: 0.157)
+        }
+    }
+
+    private var iconName: String {
+        switch control {
+        case .close:
+            "xmark"
+        case .minimize:
+            "minus"
+        }
+    }
+
+    private var accessibilityLabel: String {
+        switch control {
+        case .close:
+            "Close"
+        case .minimize:
+            "Minimize"
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(color)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+                    )
+
+                Image(systemName: iconName)
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.46))
+                    .opacity(isHovering ? 1 : 0)
+            }
+            .frame(width: 14, height: 14)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+        .help(accessibilityLabel)
     }
 }
 

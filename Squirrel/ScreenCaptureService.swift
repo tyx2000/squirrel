@@ -32,7 +32,7 @@ final class ScreenCaptureService: ObservableObject {
             return
         }
 
-        MainWindowPresenter.shared.hideClipboardWindow()
+        MainWindowPresenter.shared.beginCapturePresentation()
         isPreparingCapture = true
 
         Task { @MainActor in
@@ -40,17 +40,20 @@ final class ScreenCaptureService: ObservableObject {
 
             do {
                 guard let captureScreen = Self.screenContainingMouse(from: NSScreen.screens) else {
+                    MainWindowPresenter.shared.endCapturePresentation()
                     fail("Capture Area could not identify the selected screen.", onFailure: onFailure)
                     return
                 }
                 let snapshotsByDisplayID = try await Self.captureSnapshots(for: [captureScreen])
                 guard !snapshotsByDisplayID.isEmpty else {
+                    MainWindowPresenter.shared.endCapturePresentation()
                     fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
                     return
                 }
 
                 beginOverlay(with: snapshotsByDisplayID, onFailure: onFailure)
             } catch {
+                MainWindowPresenter.shared.endCapturePresentation()
                 fail("Capture Area failed: \(error.localizedDescription)", onFailure: onFailure)
             }
         }
@@ -71,6 +74,7 @@ final class ScreenCaptureService: ObservableObject {
             snapshotsByDisplayID: snapshotsByDisplayID,
             onComplete: { [weak self] action, screen, snapshot, localSelectionRect, annotations in
                 self?.overlayController = nil
+                MainWindowPresenter.shared.endCapturePresentation()
                 self?.completeCapture(
                     action: action,
                     screen: screen,
@@ -82,6 +86,7 @@ final class ScreenCaptureService: ObservableObject {
             },
             onCancel: { [weak self] in
                 self?.overlayController = nil
+                MainWindowPresenter.shared.endCapturePresentation()
             }
         )
         overlayController = controller

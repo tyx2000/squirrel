@@ -12,6 +12,7 @@ final class MainWindowPresenter {
     private weak var services: AppServices?
     private let windowDelegate = MainWindowDelegate()
     private var shouldShowWhenAvailable = false
+    private var isSuppressingWindowPresentation = false
     private let animationDuration: TimeInterval = 0.16
     private let windowSize = NSSize(width: 1080, height: 720)
 
@@ -44,6 +45,7 @@ final class MainWindowPresenter {
             return
         }
 
+        guard !isSuppressingWindowPresentation else { return }
         guard let window = window ?? makeWindow() else {
             shouldShowWhenAvailable = true
             return
@@ -77,12 +79,36 @@ final class MainWindowPresenter {
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            guard !self.isSuppressingWindowPresentation else { return }
+            guard window.isVisible else { return }
             NSApp.activate(ignoringOtherApps: true)
             self.configureWindow(window)
             window.orderFrontRegardless()
             window.makeKeyAndOrderFront(nil)
             NotificationCenter.default.post(name: .showClipboardHistory, object: nil)
         }
+    }
+
+    func beginCapturePresentation() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.beginCapturePresentation()
+            }
+            return
+        }
+
+        isSuppressingWindowPresentation = true
+    }
+
+    func endCapturePresentation() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.endCapturePresentation()
+            }
+            return
+        }
+
+        isSuppressingWindowPresentation = false
     }
 
     func hideClipboardWindow(_ window: NSWindow? = nil) {
@@ -152,8 +178,8 @@ final class MainWindowPresenter {
         window.maxSize = windowSize
         window.setContentSize(windowSize)
         window.isReleasedWhenClosed = false
-        window.standardWindowButton(.closeButton)?.isHidden = false
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.level = .normal
         window.collectionBehavior = []
