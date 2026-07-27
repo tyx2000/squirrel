@@ -1,7 +1,6 @@
 // Purpose: Creates, presents, animates, and releases the clipboard management window on demand.
 
 import AppKit
-import ApplicationServices
 import Foundation
 import QuartzCore
 import SwiftUI
@@ -13,14 +12,8 @@ final class MainWindowPresenter {
     private weak var services: AppServices?
     private let windowDelegate = MainWindowDelegate()
     private var shouldShowWhenAvailable = false
-    private var isHiding = false
-    private var pendingClipboardPromotion: ClipboardItem?
-    private var localDismissMonitor: Any?
-    private var globalDismissMonitor: Any?
-    private var escapeEventTap: CFMachPort?
-    private var escapeEventTapSource: CFRunLoopSource?
     private let animationDuration: TimeInterval = 0.16
-    private let windowSize = NSSize(width: 720, height: 480)
+    private let windowSize = NSSize(width: 1080, height: 720)
 
     private init() {}
 
@@ -40,11 +33,7 @@ final class MainWindowPresenter {
             return
         }
 
-        if let window, window.isVisible, !isHiding {
-            hideClipboardWindow(window)
-        } else {
-            showClipboardWindow()
-        }
+        showClipboardWindow()
     }
 
     func showClipboardWindow() {
@@ -61,14 +50,15 @@ final class MainWindowPresenter {
         }
 
         shouldShowWhenAvailable = false
-        isHiding = false
 
         if window.isMiniaturized {
             window.deminiaturize(nil)
         }
 
         configureWindow(window)
-        window.setFrame(centeredFrame(), display: false)
+        if !window.isVisible {
+            window.setFrame(centeredFrame(), display: false)
+        }
         let targetFrame = window.frame
         let shouldAnimate = !window.isVisible || window.alphaValue < 1
 
@@ -81,7 +71,6 @@ final class MainWindowPresenter {
         NSApp.activate(ignoringOtherApps: true)
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
-        installDismissEventMonitors(for: window)
 
         if shouldAnimate {
             animate(window: window, toAlpha: 1, frame: targetFrame)
@@ -96,22 +85,6 @@ final class MainWindowPresenter {
         }
     }
 
-    func promoteClipboardItemAfterNextHide(_ item: ClipboardItem) {
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in
-                self?.promoteClipboardItemAfterNextHide(item)
-            }
-            return
-        }
-
-        guard let window, window.isVisible else {
-            services?.clipboardStore.promoteItem(item)
-            return
-        }
-
-        pendingClipboardPromotion = item
-    }
-
     func hideClipboardWindow(_ window: NSWindow? = nil) {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
@@ -122,35 +95,8 @@ final class MainWindowPresenter {
 
         guard let window = window ?? self.window else { return }
         guard window.isVisible else { return }
-        guard !isHiding else { return }
 
-        isHiding = true
-        let targetFrame = window.frame.offsetBy(dx: 0, dy: -8)
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = animationDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().alphaValue = 0
-            window.animator().setFrame(targetFrame, display: true)
-        } completionHandler: { [weak self, weak window] in
-            guard let self, let window else { return }
-            window.orderOut(nil)
-            window.alphaValue = 1
-            window.setFrame(targetFrame.offsetBy(dx: 0, dy: 8), display: false)
-            window.contentViewController = nil
-            if self.window === window {
-                self.window = nil
-            }
-            self.removeDismissEventMonitors()
-            self.isHiding = false
-            self.promotePendingClipboardItem()
-        }
-    }
-
-    private func promotePendingClipboardItem() {
-        guard let pendingClipboardPromotion else { return }
-        self.pendingClipboardPromotion = nil
-        services?.clipboardStore.promoteItem(pendingClipboardPromotion)
+        window.orderOut(nil)
     }
 
     private func makeWindow() -> NSWindow? {
@@ -162,12 +108,13 @@ final class MainWindowPresenter {
             .environmentObject(services.windowManager)
             .environmentObject(services.screenCaptureService)
             .environmentObject(services.screenRecordingService)
+            .environmentObject(services.diskVacuumService)
             .frame(width: windowSize.width, height: windowSize.height)
             .ignoresSafeArea()
 
-        let window = MainClipboardWindow(
+        let window = NSWindow(
             contentRect: initialFrame(),
-            styleMask: [.titled, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
             defer: true
         )
@@ -205,11 +152,11 @@ final class MainWindowPresenter {
         window.maxSize = windowSize
         window.setContentSize(windowSize)
         window.isReleasedWhenClosed = false
-        window.standardWindowButton(.closeButton)?.isHidden = true
-        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.closeButton)?.isHidden = false
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = false
         window.standardWindowButton(.zoomButton)?.isHidden = true
-        window.level = .statusBar
-        window.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary, .transient])
+        window.level = .normal
+        window.collectionBehavior = []
     }
 
     private func animate(window: NSWindow, toAlpha alpha: CGFloat, frame: NSRect) {
@@ -220,142 +167,15 @@ final class MainWindowPresenter {
             window.animator().setFrame(frame, display: true)
         }
     }
-
-    private func installDismissEventMonitors(for window: NSWindow) {
-        removeDismissEventMonitors()
-
-        localDismissMonitor = NSEvent.addLocalMonitorForEvents(
-            matching: [.keyDown, .leftMouseDown, .rightMouseDown]
-        ) { [weak self, weak window] event in
-            guard let self, let window else { return event }
-
-            if event.type == .keyDown, event.keyCode == 53 {
-                NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
-                self.hideClipboardWindow(window)
-                return nil
-            }
-
-            guard event.type == .leftMouseDown || event.type == .rightMouseDown else {
-                return event
-            }
-
-            if event.window !== window {
-                self.hideClipboardWindow(window)
-                return event
-            }
-
-            guard let contentView = window.contentView else {
-                self.hideClipboardWindow(window)
-                return event
-            }
-
-            let location = contentView.convert(event.locationInWindow, from: nil)
-            if !contentView.bounds.contains(location) {
-                self.hideClipboardWindow(window)
-            }
-
-            return event
-        }
-
-        globalDismissMonitor = NSEvent.addGlobalMonitorForEvents(
-            matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self, weak window] _ in
-            guard let self, let window else { return }
-            self.hideClipboardWindow(window)
-        }
-
-        installEscapeEventTap()
-    }
-
-    private func removeDismissEventMonitors() {
-        if let localDismissMonitor {
-            NSEvent.removeMonitor(localDismissMonitor)
-            self.localDismissMonitor = nil
-        }
-
-        if let globalDismissMonitor {
-            NSEvent.removeMonitor(globalDismissMonitor)
-            self.globalDismissMonitor = nil
-        }
-
-        if let escapeEventTapSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), escapeEventTapSource, .commonModes)
-            self.escapeEventTapSource = nil
-        }
-
-        if let escapeEventTap {
-            CFMachPortInvalidate(escapeEventTap)
-            self.escapeEventTap = nil
-        }
-    }
-
-    private func installEscapeEventTap() {
-        guard AXIsProcessTrusted() else { return }
-
-        let eventMask = CGEventMask(1 << CGEventType.keyDown.rawValue)
-        let callback: CGEventTapCallBack = { _, type, event, _ in
-            guard type == .keyDown,
-                  event.getIntegerValueField(.keyboardEventKeycode) == 53 else {
-                return Unmanaged.passUnretained(event)
-            }
-
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
-                MainWindowPresenter.shared.hideClipboardWindow()
-            }
-
-            return Unmanaged.passUnretained(event)
-        }
-
-        guard let eventTap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: eventMask,
-            callback: callback,
-            userInfo: nil
-        ) else {
-            return
-        }
-
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: eventTap, enable: true)
-
-        escapeEventTap = eventTap
-        escapeEventTapSource = source
-    }
 }
 
 private final class MainWindowDelegate: NSObject, NSWindowDelegate {
-    func windowDidResignKey(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow else { return }
-        NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
-        MainWindowPresenter.shared.hideClipboardWindow(window)
-    }
-
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
-        MainWindowPresenter.shared.hideClipboardWindow(sender)
-        return false
+        return true
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
-        NSSize(width: 720, height: 480)
-    }
-}
-
-private final class MainClipboardWindow: NSWindow {
-    override func cancelOperation(_ sender: Any?) {
-        NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
-        MainWindowPresenter.shared.hideClipboardWindow(self)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 {
-            cancelOperation(nil)
-        } else {
-            super.keyDown(with: event)
-        }
+        NSSize(width: 1080, height: 720)
     }
 }

@@ -2,6 +2,11 @@
 
 import SwiftUI
 
+private enum ShortcutTypography {
+    static let body = Font.system(size: 12)
+    static let secondary = Font.system(size: 11)
+}
+
 struct ShortcutRecorderView: View {
     @EnvironmentObject private var hotKeyManager: HotKeyManager
 
@@ -29,6 +34,7 @@ struct ShortcutRecorderView: View {
                 }
             }
         }
+        .font(ShortcutTypography.body)
         .onDisappear {
             cancelRecording()
         }
@@ -67,7 +73,7 @@ struct CompactShortcutRecorderView: View {
     var body: some View {
         HStack(spacing: 6) {
             Text(title)
-                .font(.caption)
+                .font(ShortcutTypography.secondary)
                 .foregroundStyle(.secondary)
             Button(isRecording ? "Press New Shortcut" : shortcut.displayString) {
                 startRecording()
@@ -84,6 +90,7 @@ struct CompactShortcutRecorderView: View {
                 }
             }
         }
+        .font(ShortcutTypography.body)
         .onDisappear {
             cancelRecording()
         }

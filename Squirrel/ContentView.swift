@@ -8,7 +8,6 @@
 
 import SwiftUI
 import AppKit
-import ImageIO
 
 private enum AppPalette {
     static let windowBackground = Color(red: 0.965, green: 0.969, blue: 0.976)
@@ -22,8 +21,20 @@ private enum AppPalette {
     static let destructiveHover = Color(red: 0.992, green: 0.925, blue: 0.925)
 }
 
+private enum AppTypography {
+    static let body = Font.system(size: 12)
+    static let bodyMedium = Font.system(size: 12, weight: .medium)
+    static let bodySemibold = Font.system(size: 12, weight: .semibold)
+    static let secondary = Font.system(size: 11)
+    static let secondarySemibold = Font.system(size: 11, weight: .semibold)
+    static let title = Font.system(size: 16, weight: .medium)
+    static let metric = Font.system(size: 13, weight: .semibold, design: .rounded)
+    static let icon = Font.system(size: 12, weight: .semibold)
+}
+
 private enum MainTab: String, CaseIterable, Identifiable {
     case history
+    case vacuum
     case shortcuts
 
     var id: String { rawValue }
@@ -31,6 +42,7 @@ private enum MainTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .history: "Clipboard"
+        case .vacuum: "Vacuum"
         case .shortcuts: "Shortcuts"
         }
     }
@@ -38,6 +50,7 @@ private enum MainTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .history: "doc.on.clipboard"
+        case .vacuum: "gauge.with.dots.needle.bottom.100percent"
         case .shortcuts: "keyboard"
         }
     }
@@ -48,15 +61,7 @@ private enum ClipboardLayout {
     static let rowSpacing: CGFloat = 10
     static let rowMaxHeight: CGFloat = 300
     static let rowActionWidth: CGFloat = 82
-    static let thumbnailCacheLimit = 4 * 1024 * 1024
-    static let thumbnailCacheCountLimit = 24
     static let resortAnimation = Animation.spring(response: 0.28, dampingFraction: 0.88)
-
-    static func configureThumbnailCache() {
-        let cache = ClipboardImagePreview.getThumbnailCache()
-        cache.totalCostLimit = thumbnailCacheLimit
-        cache.countLimit = thumbnailCacheCountLimit
-    }
 }
 
 struct ContentView: View {
@@ -65,6 +70,7 @@ struct ContentView: View {
     @EnvironmentObject private var windowManager: WindowManager
     @EnvironmentObject private var screenCaptureService: ScreenCaptureService
     @EnvironmentObject private var screenRecordingService: ScreenRecordingService
+    @EnvironmentObject private var diskVacuumService: DiskVacuumService
 
     @State private var selectedTab: MainTab = .history
     @State private var isQuitButtonHovering = false
@@ -77,7 +83,7 @@ struct ContentView: View {
                     Image(systemName: "exclamationmark.circle.fill")
                         .foregroundStyle(.orange)
                     Text(error)
-                        .font(.caption)
+                        .font(AppTypography.secondary)
                         .lineLimit(2)
                     Spacer()
                     Button(action: { clipboardStore.clearError() }) {
@@ -99,13 +105,11 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(AppPalette.windowBackground)
+        .font(AppTypography.body)
         .onReceive(NotificationCenter.default.publisher(for: .showClipboardHistory)) { _ in
             withAnimation(.easeInOut(duration: 0.18)) {
                 selectedTab = .history
             }
-        }
-        .onAppear {
-            ClipboardLayout.configureThumbnailCache()
         }
     }
 
@@ -121,7 +125,7 @@ struct ContentView: View {
                         Image(systemName: tab.icon)
                             .frame(width: 16)
                         Text(tab.title)
-                            .font(.subheadline.weight(.medium))
+                            .font(AppTypography.bodyMedium)
                     }
                     .frame(minWidth: 116)
                     .padding(.horizontal, 12)
@@ -142,7 +146,7 @@ struct ContentView: View {
                 NSApp.terminate(nil)
             } label: {
                 Image(systemName: "power")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(AppTypography.icon)
                     .foregroundStyle(isQuitButtonHovering ? .white : .red)
                     .frame(width: 34, height: 30)
                     .background(
@@ -159,7 +163,8 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.leading, 82)
+        .padding(.trailing, 18)
         .frame(height: 56)
         .background(AppPalette.topBarBackground)
     }
@@ -179,10 +184,7 @@ struct ContentView: View {
                     imageDataProvider: { clipboardStore.imageData(for: item) },
                     onCopy: {
                         guard clipboardStore.copyToPasteboard(item) else { return }
-                        MainWindowPresenter.shared.hideClipboardWindow()
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                            clipboardStore.promoteItem(item)
-                        }
+                        clipboardStore.promoteItem(item)
                     },
                     onDelete: {
                         withAnimation(ClipboardLayout.resortAnimation) {
@@ -191,6 +193,8 @@ struct ContentView: View {
                     }
                 )
             }
+        case .vacuum:
+            VacuumView()
         case .shortcuts:
             shortcutsView
         }
@@ -295,7 +299,7 @@ struct ContentView: View {
                     Spacer(minLength: 12)
                     if let outputURL = screenRecordingService.outputURL {
                         Text(outputURL.lastPathComponent)
-                            .font(.footnote)
+                            .font(AppTypography.secondary)
                             .foregroundStyle(AppPalette.secondaryText)
                     }
                 }
@@ -313,7 +317,7 @@ struct ContentView: View {
 
                 if let message = windowManager.lastMessage {
                     Text(message)
-                        .font(.footnote)
+                        .font(AppTypography.secondary)
                         .foregroundStyle(AppPalette.secondaryText)
                 }
             }
@@ -329,8 +333,9 @@ struct ContentView: View {
                 .font(.system(size: 40))
                 .foregroundStyle(AppPalette.secondaryText)
             Text(title)
-                .font(.title3.weight(.medium))
+                .font(AppTypography.title)
             Text(subtitle)
+                .font(AppTypography.body)
                 .foregroundStyle(AppPalette.secondaryText)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -357,6 +362,195 @@ private struct ShortcutRecorderGroupView: View {
     }
 }
 
+private struct VacuumView: View {
+    @EnvironmentObject private var diskVacuumService: DiskVacuumService
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 18) {
+                    VacuumMetricView(
+                        title: "Reclaimable",
+                        value: DiskVacuumService.formatBytes(diskVacuumService.totalScannedBytes)
+                    )
+                    VacuumMetricView(
+                        title: "Selected",
+                        value: DiskVacuumService.formatBytes(diskVacuumService.selectedBytes)
+                    )
+
+                    Spacer(minLength: 12)
+
+                    Button {
+                        diskVacuumService.scan()
+                    } label: {
+                        Label(diskVacuumService.isScanning ? "Scanning" : "Scan", systemImage: "magnifyingglass")
+                    }
+                    .disabled(diskVacuumService.isScanning || diskVacuumService.isCleaning)
+
+                    Button {
+                        diskVacuumService.cleanSelected()
+                    } label: {
+                        Label("Clean", systemImage: "trash")
+                    }
+                    .disabled(diskVacuumService.selectedBytes == 0 || diskVacuumService.isScanning || diskVacuumService.isCleaning)
+                }
+
+                if let currentPath = diskVacuumService.currentPath {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(currentPath)
+                            .font(AppTypography.secondary)
+                            .foregroundStyle(AppPalette.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+
+                if let message = diskVacuumService.lastMessage {
+                    HStack(spacing: 10) {
+                        Label(message, systemImage: "info.circle")
+                            .foregroundStyle(AppPalette.secondaryText)
+                        Spacer()
+                        Button("Dismiss") {
+                            diskVacuumService.clearMessage()
+                        }
+                    }
+                    .font(AppTypography.secondary)
+                }
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 16)
+            .background(AppPalette.topBarBackground)
+
+            Rectangle()
+                .fill(AppPalette.separator)
+                .frame(height: 1)
+
+            if diskVacuumService.items.isEmpty, !diskVacuumService.isScanning {
+                emptyVacuumState
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(diskVacuumService.items) { item in
+                            VacuumItemRow(item: item, level: 0)
+                        }
+                    }
+                    .padding(14)
+                }
+            }
+        }
+    }
+
+    private var emptyVacuumState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "externaldrive.badge.magnifyingglass")
+                .font(.system(size: 40))
+                .foregroundStyle(AppPalette.secondaryText)
+            Text("No Scan Results")
+                .font(AppTypography.title)
+            Text("Run a scan to list cleanup candidates.")
+                .font(AppTypography.body)
+                .foregroundStyle(AppPalette.secondaryText)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct VacuumMetricView: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(AppTypography.secondary)
+                .foregroundStyle(AppPalette.secondaryText)
+            Text(value)
+                .font(AppTypography.metric.monospacedDigit())
+                .lineLimit(1)
+        }
+        .frame(minWidth: 104, alignment: .leading)
+    }
+}
+
+private struct VacuumItemRow: View {
+    @EnvironmentObject private var diskVacuumService: DiskVacuumService
+
+    let item: VacuumScanItem
+    let level: Int
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                if item.hasChildren {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            diskVacuumService.setExpanded(!item.isExpanded, for: item.id)
+                        }
+                    } label: {
+                        Image(systemName: item.isExpanded ? "chevron.down" : "chevron.right")
+                            .font(AppTypography.icon)
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Color.clear
+                        .frame(width: 28, height: 28)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title)
+                        .font(item.hasChildren ? AppTypography.bodySemibold : AppTypography.body)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let path = item.path {
+                        Text(path)
+                            .font(AppTypography.secondary)
+                            .foregroundStyle(AppPalette.secondaryText)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text(item.kind.rawValue)
+                            .font(AppTypography.secondary)
+                            .foregroundStyle(AppPalette.secondaryText)
+                    }
+                }
+
+                Spacer(minLength: 12)
+
+                Text(DiskVacuumService.formatBytes(item.sizeBytes))
+                    .font(AppTypography.body.monospacedDigit())
+                    .foregroundStyle(AppPalette.secondaryText)
+                    .frame(width: 84, alignment: .trailing)
+
+                Toggle("", isOn: Binding(
+                    get: { item.isSelected },
+                    set: { diskVacuumService.setSelected($0, for: item.id) }
+                ))
+                .toggleStyle(.checkbox)
+                .labelsHidden()
+            }
+            .padding(.leading, CGFloat(level) * 28)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 48)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(level == 0 ? AppPalette.cardBackground : Color.clear)
+            )
+
+            if item.isExpanded {
+                VStack(spacing: 4) {
+                    ForEach(item.children) { child in
+                        VacuumItemRow(item: child, level: level + 1)
+                    }
+                }
+                .padding(.top, 4)
+            }
+        }
+    }
+}
+
 private struct ClipboardHistoryCard: View {
     let item: ClipboardItem
     let imageURLProvider: () -> URL?
@@ -377,12 +571,12 @@ private struct ClipboardHistoryCard: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 16) {
                 Text(sourceApplicationName ?? "Unknown App")
-                    .font(.caption.weight(.semibold))
+                    .font(AppTypography.secondarySemibold)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
                 Text(timestamp)
-                    .font(.caption)
+                    .font(AppTypography.secondary)
                     .foregroundStyle(AppPalette.secondaryText)
                     .lineLimit(1)
 
@@ -399,7 +593,7 @@ private struct ClipboardHistoryCard: View {
                         )
                     } else {
                         Text(item.text)
-                            .font(.body)
+                            .font(AppTypography.body)
                             .foregroundStyle(.primary)
                             .lineLimit(11)
                             .truncationMode(.tail)
@@ -453,18 +647,12 @@ private struct ClipboardImagePreview: View {
     let imageID: UUID
     let imageURLProvider: () -> URL?
     let imageDataProvider: () -> Data?
-    @State private var thumbnail: NSImage?
-
-    private static let thumbnailCache = NSCache<NSString, NSImage>()
-
-    static func getThumbnailCache() -> NSCache<NSString, NSImage> {
-        return thumbnailCache
-    }
+    @State private var image: NSImage?
 
     var body: some View {
         Group {
-            if let thumbnail {
-                Image(nsImage: thumbnail)
+            if let image {
+                Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
             } else {
@@ -476,90 +664,29 @@ private struct ClipboardImagePreview: View {
         .background(Color.white.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .onAppear {
-            thumbnail = makeThumbnail()
+            image = loadOriginalImage()
         }
         .onChange(of: imageID) { _, _ in
-            thumbnail = makeThumbnail()
+            image = loadOriginalImage()
         }
         .onDisappear {
-            thumbnail = nil
+            image = nil
         }
     }
 
-    private func makeThumbnail() -> NSImage? {
-        let cacheKey = imageID.uuidString as NSString
-
-        if let cached = Self.thumbnailCache.object(forKey: cacheKey) {
-            return cached
-        }
-
-        var result: NSImage? = nil
-
+    private func loadOriginalImage() -> NSImage? {
         autoreleasepool {
             if let imageURL = imageURLProvider(),
-               let thumbnail = ClipboardImageThumbnail.make(from: imageURL) {
-                result = thumbnail
-            } else if let imageData = imageDataProvider() {
-                result = ClipboardImageThumbnail.make(from: imageData)
+               let image = NSImage(contentsOf: imageURL) {
+                return image
             }
-        }
 
-        if let result {
-            Self.thumbnailCache.setObject(
-                result,
-                forKey: cacheKey,
-                cost: ClipboardImageThumbnail.memoryCost(for: result)
-            )
-        }
+            if let imageData = imageDataProvider() {
+                return NSImage(data: imageData)
+            }
 
-        return result
-    }
-}
-
-private enum ClipboardImageThumbnail {
-    static func make(from url: URL) -> NSImage? {
-        let options = thumbnailOptions
-
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
             return nil
         }
-
-        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-    }
-
-    static func make(from data: Data) -> NSImage? {
-        let options = thumbnailOptions
-
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
-            return nil
-        }
-
-        return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
-    }
-
-    static func memoryCost(for image: NSImage) -> Int {
-        // NSCache cost should reflect the largest single representation,
-        // not the sum — the cache evicts whole entries, not individual reps.
-        let representationCost = image.representations
-            .map { max($0.pixelsWide, 1) * max($0.pixelsHigh, 1) * 4 }
-            .max()
-
-        if let representationCost {
-            return representationCost
-        }
-
-        return max(Int(image.size.width), 1) * max(Int(image.size.height), 1) * 4
-    }
-
-    private static var thumbnailOptions: CFDictionary {
-        [
-            kCGImageSourceShouldCache: false,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 256
-        ] as CFDictionary
     }
 }
 
@@ -574,7 +701,7 @@ private struct HistoryActionButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 13, weight: .semibold))
+                .font(AppTypography.icon)
                 .foregroundStyle(isHovering && isEnabled ? .white : background)
                 .frame(width: 34, height: 30, alignment: .center)
                 .background(

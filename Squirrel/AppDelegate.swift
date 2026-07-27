@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var services: AppServices?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
         services = AppServices()
 
         NotificationCenter.default.addObserver(
@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: .openClipboardWindow,
             object: nil
         )
+
+        openClipboardWindow()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
