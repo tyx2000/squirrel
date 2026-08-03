@@ -135,7 +135,6 @@ final class CaptureOverlayController {
 
     func begin() {
         let mouseLocation = NSEvent.mouseLocation
-        NSApp.activate(ignoringOtherApps: true)
         windows = NSScreen.screens.compactMap { screen in
             guard let displayID = screen.displayID,
                   let snapshot = snapshotsByDisplayID[displayID] else {
@@ -199,11 +198,11 @@ final class CaptureOverlayController {
     }
 }
 
-final class CaptureOverlayWindow: NSWindow {
+final class CaptureOverlayWindow: NSPanel {
     init(screen: NSScreen) {
         super.init(
             contentRect: screen.frame,
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -213,11 +212,12 @@ final class CaptureOverlayWindow: NSWindow {
         hasShadow = false
         level = .screenSaver
         ignoresMouseEvents = false
+        hidesOnDeactivate = false
         collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary, .transient])
     }
 
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
 
 final class CaptureOverlayView: NSView {

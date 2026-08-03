@@ -350,6 +350,81 @@ struct SquirrelTests {
         #expect(HotKeyCommand.standaloneCommands.contains(.fullscreen))
     }
 
+    @Test func vacuumRemovesCategoryAfterAllChildrenAreCleaned() async throws {
+        let child = VacuumScanItem(
+            id: "/tmp/cache-a",
+            title: "cache-a",
+            path: "/tmp/cache-a",
+            kind: .cache,
+            sizeBytes: 100,
+            isSelected: true,
+            isExpanded: false,
+            children: []
+        )
+        let category = VacuumScanItem(
+            id: "category:Caches",
+            title: "Caches",
+            path: nil,
+            kind: .cache,
+            sizeBytes: child.sizeBytes,
+            isSelected: true,
+            isExpanded: true,
+            children: [child]
+        )
+
+        let remaining = DiskVacuumService.removingCleanedItems(
+            ids: [child.id],
+            paths: [child.path!],
+            from: [category]
+        )
+
+        #expect(remaining.isEmpty)
+    }
+
+    @Test func vacuumRecalculatesPartiallyCleanedCategory() async throws {
+        let removedChild = VacuumScanItem(
+            id: "/tmp/cache-a",
+            title: "cache-a",
+            path: "/tmp/cache-a",
+            kind: .cache,
+            sizeBytes: 100,
+            isSelected: true,
+            isExpanded: false,
+            children: []
+        )
+        let remainingChild = VacuumScanItem(
+            id: "/tmp/cache-b",
+            title: "cache-b",
+            path: "/tmp/cache-b",
+            kind: .cache,
+            sizeBytes: 40,
+            isSelected: false,
+            isExpanded: false,
+            children: []
+        )
+        let category = VacuumScanItem(
+            id: "category:Caches",
+            title: "Caches",
+            path: nil,
+            kind: .cache,
+            sizeBytes: 140,
+            isSelected: false,
+            isExpanded: true,
+            children: [removedChild, remainingChild]
+        )
+
+        let remaining = DiskVacuumService.removingCleanedItems(
+            ids: [removedChild.id],
+            paths: [removedChild.path!],
+            from: [category]
+        )
+        let updatedCategory = try #require(remaining.first)
+
+        #expect(updatedCategory.children == [remainingChild])
+        #expect(updatedCategory.sizeBytes == remainingChild.sizeBytes)
+        #expect(updatedCategory.isSelected == false)
+    }
+
     private static func testImageData(color: NSColor = .red) -> Data? {
         let image = NSImage(size: NSSize(width: 2, height: 2))
         image.lockFocus()

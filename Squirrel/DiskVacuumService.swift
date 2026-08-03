@@ -100,14 +100,18 @@ final class DiskVacuumService: ObservableObject {
         isCleaning = true
         lastMessage = nil
         let selectedIDs = Set(selectedItems.map(\.id))
-        let urls = selectedItems.compactMap { item -> URL? in
-            guard let path = item.path else { return nil }
-            return URL(fileURLWithPath: path)
+        let urls = Self.uniqueCleanupURLs(for: selectedItems)
+
+        guard !urls.isEmpty else {
+            isCleaning = false
+            items = Self.removingEmptyCategories(from: items)
+            lastMessage = "The selected items are no longer available. Run a new scan."
+            return
         }
 
         Task.detached(priority: .utility) {
             var removedPaths = Set<String>()
-            var failureCount = 0
+            var failures: [CleanFailure] = []
 
             for url in urls {
                 do {
@@ -115,19 +119,23 @@ final class DiskVacuumService: ObservableObject {
                     try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
                     removedPaths.insert(url.path)
                 } catch {
-                    failureCount += 1
+                    failures.append(CleanFailure(path: url.path, reason: error.localizedDescription))
                 }
             }
 
-            let result = CleanResult(removedPaths: removedPaths, failureCount: failureCount)
+            let result = CleanResult(removedPaths: removedPaths, failures: failures)
 
             await MainActor.run {
-                self.items = Self.removing(ids: selectedIDs, paths: result.removedPaths, from: self.items)
+                self.items = Self.removingCleanedItems(
+                    ids: selectedIDs,
+                    paths: result.removedPaths,
+                    from: self.items
+                )
                 self.isCleaning = false
-                if result.failureCount == 0 {
+                if result.failures.isEmpty {
                     self.lastMessage = "Moved \(result.removedPaths.count) item(s) to Trash."
                 } else {
-                    self.lastMessage = "Moved \(result.removedPaths.count) item(s) to Trash. \(result.failureCount) item(s) could not be moved."
+                    self.lastMessage = Self.failureMessage(for: result)
                 }
             }
         }
@@ -156,7 +164,16 @@ final class DiskVacuumService: ObservableObject {
             if item.hasChildren {
                 return selectedLeafItems(in: item.children)
             }
-            return item.isSelected ? [item] : []
+            return item.isSelected && item.path != nil ? [item] : []
+        }
+    }
+
+    private nonisolated static func uniqueCleanupURLs(for items: [VacuumScanItem]) -> [URL] {
+        var seenPaths = Set<String>()
+        return items.compactMap { item in
+            guard let path = item.path else { return nil }
+            let url = URL(fileURLWithPath: path).standardizedFileURL
+            return seenPaths.insert(url.path).inserted ? url : nil
         }
     }
 
@@ -186,7 +203,7 @@ final class DiskVacuumService: ObservableObject {
         }
     }
 
-    private nonisolated static func removing(
+    nonisolated static func removingCleanedItems(
         ids: Set<String>,
         paths: Set<String>,
         from items: [VacuumScanItem]
@@ -197,13 +214,37 @@ final class DiskVacuumService: ObservableObject {
             }
 
             var updatedItem = item
-            updatedItem.children = removing(ids: ids, paths: paths, from: item.children)
-            if updatedItem.hasChildren {
+            let wasCategory = updatedItem.hasChildren
+            updatedItem.children = removingCleanedItems(ids: ids, paths: paths, from: item.children)
+            if wasCategory {
+                guard !updatedItem.children.isEmpty else { return nil }
                 updatedItem.sizeBytes = updatedItem.children.reduce(0) { $0 + $1.sizeBytes }
                 updatedItem.isSelected = updatedItem.children.allSatisfy(\.isSelected)
             }
             return updatedItem.sizeBytes > 0 || !updatedItem.children.isEmpty ? updatedItem : nil
         }
+    }
+
+    private nonisolated static func removingEmptyCategories(from items: [VacuumScanItem]) -> [VacuumScanItem] {
+        items.compactMap { item in
+            var updatedItem = item
+            updatedItem.children = removingEmptyCategories(from: item.children)
+            if item.path == nil, updatedItem.children.isEmpty {
+                return nil
+            }
+            return updatedItem
+        }
+    }
+
+    private nonisolated static func failureMessage(for result: CleanResult) -> String {
+        guard let firstFailure = result.failures.first else {
+            return "Moved \(result.removedPaths.count) item(s) to Trash."
+        }
+
+        let name = URL(fileURLWithPath: firstFailure.path).lastPathComponent
+        let additionalFailures = result.failures.count - 1
+        let suffix = additionalFailures > 0 ? " (+\(additionalFailures) more)" : ""
+        return "Moved \(result.removedPaths.count) item(s). Could not move \(name): \(firstFailure.reason)\(suffix)"
     }
 }
 
@@ -438,5 +479,10 @@ private struct ScanTarget {
 
 private struct CleanResult: Sendable {
     let removedPaths: Set<String>
-    let failureCount: Int
+    let failures: [CleanFailure]
+}
+
+private struct CleanFailure: Sendable {
+    let path: String
+    let reason: String
 }

@@ -182,7 +182,7 @@ final class MainWindowPresenter {
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
         window.level = .normal
-        window.collectionBehavior = []
+        window.collectionBehavior = [.transient, .ignoresCycle]
     }
 
     private func animate(window: NSWindow, toAlpha alpha: CGFloat, frame: NSRect) {
