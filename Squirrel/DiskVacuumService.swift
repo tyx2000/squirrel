@@ -169,12 +169,19 @@ final class DiskVacuumService: ObservableObject {
     }
 
     private nonisolated static func uniqueCleanupURLs(for items: [VacuumScanItem]) -> [URL] {
-        var seenPaths = Set<String>()
-        return items.compactMap { item in
-            guard let path = item.path else { return nil }
-            let url = URL(fileURLWithPath: path).standardizedFileURL
-            return seenPaths.insert(url.path).inserted ? url : nil
+        let sortedURLs = items
+            .compactMap { $0.path.map { URL(fileURLWithPath: $0).standardizedFileURL } }
+            .sorted { $0.path.count < $1.path.count }
+
+        var kept: [URL] = []
+        for url in sortedURLs where !isCovered(url.path, by: kept.map(\.path)) {
+            kept.append(url)
         }
+        return kept
+    }
+
+    nonisolated static func isCovered(_ path: String, by paths: some Sequence<String>) -> Bool {
+        paths.contains { path == $0 || path.hasPrefix($0 + "/") }
     }
 
     private nonisolated static func updating(
@@ -209,7 +216,7 @@ final class DiskVacuumService: ObservableObject {
         from items: [VacuumScanItem]
     ) -> [VacuumScanItem] {
         items.compactMap { item in
-            if ids.contains(item.id), item.path.map(paths.contains) ?? false {
+            if ids.contains(item.id), item.path.map({ isCovered($0, by: paths) }) ?? false {
                 return nil
             }
 
@@ -249,6 +256,12 @@ final class DiskVacuumService: ObservableObject {
 }
 
 private enum VacuumScanner {
+    private nonisolated static let excludedRoots: [String] = [
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop", isDirectory: true)
+            .standardizedFileURL
+            .path
+    ]
     private nonisolated static let largeFileThreshold: UInt64 = 500 * 1024 * 1024
     private nonisolated static let maximumChildrenPerCategory = 80
     private nonisolated static let maximumLargeFiles = 100
@@ -302,11 +315,10 @@ private enum VacuumScanner {
         if let largeFiles = scanLargeFiles(
             roots: [
                 home.appendingPathComponent("Downloads", isDirectory: true),
-                home.appendingPathComponent("Desktop", isDirectory: true),
                 home.appendingPathComponent("Documents", isDirectory: true),
-                home.appendingPathComponent("Movies", isDirectory: true),
-                library.appendingPathComponent("Application Support", isDirectory: true)
+                home.appendingPathComponent("Movies", isDirectory: true)
             ],
+            coveredRoots: targets.map(\.url),
             progress: progress
         ) {
             items.append(largeFiles)
@@ -316,6 +328,7 @@ private enum VacuumScanner {
     }
 
     private nonisolated static func scanTarget(_ target: ScanTarget, progress: @escaping @Sendable (String) -> Void) -> VacuumScanItem? {
+        guard !isExcluded(target.url) else { return nil }
         guard FileManager.default.fileExists(atPath: target.url.path) else { return nil }
         progress(target.url.path)
 
@@ -355,11 +368,14 @@ private enum VacuumScanner {
 
     private nonisolated static func scanLargeFiles(
         roots: [URL],
+        coveredRoots: [URL],
         progress: @escaping @Sendable (String) -> Void
     ) -> VacuumScanItem? {
+        let coveredPaths = coveredRoots.map { $0.standardizedFileURL.path }
         let children = roots
+            .filter { !isExcluded($0) && !isContained($0, in: coveredPaths) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
-            .flatMap { largeFiles(in: $0, progress: progress) }
+            .flatMap { largeFiles(in: $0, covered: coveredPaths, progress: progress) }
             .sorted { $0.sizeBytes > $1.sizeBytes }
             .prefix(maximumLargeFiles)
 
@@ -378,7 +394,11 @@ private enum VacuumScanner {
         )
     }
 
-    private nonisolated static func largeFiles(in root: URL, progress: @escaping @Sendable (String) -> Void) -> [VacuumScanItem] {
+    private nonisolated static func largeFiles(
+        in root: URL,
+        covered: [String],
+        progress: @escaping @Sendable (String) -> Void
+    ) -> [VacuumScanItem] {
         var results: [VacuumScanItem] = []
         guard let enumerator = FileManager.default.enumerator(
             at: root,
@@ -393,6 +413,11 @@ private enum VacuumScanner {
             scannedCount += 1
             if scannedCount % 200 == 0 {
                 progress(url.path)
+            }
+
+            if isExcluded(url) || isContained(url, in: covered) {
+                enumerator.skipDescendants()
+                continue
             }
 
             guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .totalFileAllocatedSizeKey]),
@@ -421,14 +446,25 @@ private enum VacuumScanner {
     }
 
     private nonisolated static func directChildren(of url: URL) -> [URL] {
-        (try? FileManager.default.contentsOfDirectory(
+        let children = (try? FileManager.default.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey, .totalFileAllocatedSizeKey],
             options: [.skipsHiddenFiles]
         )) ?? []
+        return children.filter { !isExcluded($0) }
+    }
+
+    private nonisolated static func isExcluded(_ url: URL) -> Bool {
+        isContained(url, in: excludedRoots)
+    }
+
+    private nonisolated static func isContained(_ url: URL, in roots: [String]) -> Bool {
+        let path = url.standardizedFileURL.path
+        return roots.contains { path == $0 || path.hasPrefix($0 + "/") }
     }
 
     private nonisolated static func allocatedSize(of url: URL, progress: @escaping @Sendable (String) -> Void) -> UInt64 {
+        guard !isExcluded(url) else { return 0 }
         guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey, .totalFileAllocatedSizeKey]) else {
             return 0
         }
@@ -451,6 +487,11 @@ private enum VacuumScanner {
             scannedCount += 1
             if scannedCount % 250 == 0 {
                 progress(childURL.path)
+            }
+
+            if isExcluded(childURL) {
+                enumerator.skipDescendants()
+                continue
             }
 
             guard let childValues = try? childURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey, .totalFileAllocatedSizeKey]),

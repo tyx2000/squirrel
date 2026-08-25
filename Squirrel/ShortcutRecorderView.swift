@@ -3,8 +3,8 @@
 import SwiftUI
 
 private enum ShortcutTypography {
-    static let body = Font.system(size: 12)
-    static let secondary = Font.system(size: 11)
+    static let body = Font.system(size: 13)
+    static let secondary = Font.system(size: 12)
 }
 
 struct ShortcutRecorderView: View {

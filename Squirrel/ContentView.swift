@@ -22,14 +22,14 @@ private enum AppPalette {
 }
 
 private enum AppTypography {
-    static let body = Font.system(size: 12)
-    static let bodyMedium = Font.system(size: 12, weight: .medium)
-    static let bodySemibold = Font.system(size: 12, weight: .semibold)
-    static let secondary = Font.system(size: 11)
-    static let secondarySemibold = Font.system(size: 11, weight: .semibold)
-    static let title = Font.system(size: 16, weight: .medium)
-    static let metric = Font.system(size: 13, weight: .semibold, design: .rounded)
-    static let icon = Font.system(size: 12, weight: .semibold)
+    static let body = Font.system(size: 13)
+    static let bodyMedium = Font.system(size: 13, weight: .medium)
+    static let bodySemibold = Font.system(size: 13, weight: .semibold)
+    static let secondary = Font.system(size: 12)
+    static let secondarySemibold = Font.system(size: 12, weight: .semibold)
+    static let title = Font.system(size: 17, weight: .medium)
+    static let metric = Font.system(size: 14, weight: .semibold, design: .rounded)
+    static let icon = Font.system(size: 13, weight: .semibold)
 }
 
 private enum MainTab: String, CaseIterable, Identifiable {

@@ -16,7 +16,19 @@ final class MainWindowPresenter {
     private let animationDuration: TimeInterval = 0.16
     private let windowSize = NSSize(width: 1080, height: 720)
 
-    private init() {}
+    private init() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidResignActive),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
+    }
+
+    @objc private func applicationDidResignActive() {
+        guard !isSuppressingWindowPresentation else { return }
+        hideClipboardWindow()
+    }
 
     func configure(services: AppServices) {
         self.services = services
@@ -122,6 +134,8 @@ final class MainWindowPresenter {
         guard let window = window ?? self.window else { return }
         guard window.isVisible else { return }
 
+        shouldShowWhenAvailable = false
+        NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
         window.orderOut(nil)
     }
 
@@ -138,7 +152,7 @@ final class MainWindowPresenter {
             .frame(width: windowSize.width, height: windowSize.height)
             .ignoresSafeArea()
 
-        let window = NSWindow(
+        let window = MainWindow(
             contentRect: initialFrame(),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
             backing: .buffered,
@@ -192,6 +206,22 @@ final class MainWindowPresenter {
             window.animator().alphaValue = alpha
             window.animator().setFrame(frame, display: true)
         }
+    }
+}
+
+private final class MainWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            MainWindowPresenter.shared.hideClipboardWindow(self)
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        MainWindowPresenter.shared.hideClipboardWindow(self)
     }
 }
 
