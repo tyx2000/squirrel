@@ -3,7 +3,7 @@
 import AppKit
 
 @main
-enum SquirrelMain {
+enum SpaceMain {
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()

@@ -186,7 +186,7 @@ final class WindowManager: ObservableObject {
         if isAccessibilityTrusted {
             lastMessage = nil
         } else {
-            lastMessage = "This Squirrel build does not have Accessibility access. In System Settings > Privacy & Security > Accessibility, remove any old Squirrel entry, then add and enable: \(currentAppPath)"
+            lastMessage = "This Space build does not have Accessibility access. In System Settings > Privacy & Security > Accessibility, remove any old Space entry, then add and enable: \(currentAppPath)"
         }
     }
 

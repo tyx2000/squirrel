@@ -302,9 +302,29 @@ final class ClipboardHistoryStore: ObservableObject {
     }
 
     private nonisolated static var defaultStorageURL: URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("Squirrel", isDirectory: true)
-            .appendingPathComponent("clipboard-history.json")
+        guard let supportDirectory = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first else {
+            return nil
+        }
+
+        let directory = supportDirectory.appendingPathComponent("Space", isDirectory: true)
+        migrateLegacyStorage(
+            from: supportDirectory.appendingPathComponent("Squirrel", isDirectory: true),
+            to: directory
+        )
+        return directory.appendingPathComponent("clipboard-history.json")
+    }
+
+    // The app was called Squirrel before it was renamed; carry that history over once.
+    private nonisolated static func migrateLegacyStorage(from legacyDirectory: URL, to directory: URL) {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: legacyDirectory.path),
+              !fileManager.fileExists(atPath: directory.path) else {
+            return
+        }
+
+        try? fileManager.moveItem(at: legacyDirectory, to: directory)
     }
 
     private func storeImageData(_ imageData: Data, id: UUID) -> String? {

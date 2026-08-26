@@ -105,7 +105,7 @@ final class ScreenCaptureService: ObservableObject {
         isShowingPermissionGuide = true
         let alert = NSAlert()
         alert.messageText = "Screen Recording Access Required"
-        alert.informativeText = "Enable Squirrel in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app."
+        alert.informativeText = "Enable Space in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")

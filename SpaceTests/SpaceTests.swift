@@ -1,6 +1,6 @@
 //
-//  SquirrelTests.swift
-//  SquirrelTests
+//  SpaceTests.swift
+//  SpaceTests
 //
 //  Created by EAdib on 2026/5/18.
 //
@@ -10,10 +10,10 @@ import AppKit
 import Carbon
 import Foundation
 import Testing
-@testable import Squirrel
+@testable import Space
 
 @MainActor
-struct SquirrelTests {
+struct SpaceTests {
 
     @Test func clipboardHistoryDeduplicatesAndKeepsMostRecentCopy() async throws {
         let store = ClipboardHistoryStore(storageURL: nil)

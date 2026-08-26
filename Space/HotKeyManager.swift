@@ -19,7 +19,8 @@ final class HotKeyManager: ObservableObject {
 
     private static weak var activeManager: HotKeyManager?
     private static let signature = OSType(0x5351524C)
-    private static let defaultsKey = "Squirrel.Shortcuts"
+    private static let defaultsKey = "Space.Shortcuts"
+    private static let legacyDefaultsKey = "Squirrel.Shortcuts"
     private static let duplicateEventInterval: TimeInterval = 0.18
 
     init() {
@@ -166,7 +167,10 @@ final class HotKeyManager: ObservableObject {
     }
 
     private static func loadShortcuts() -> [HotKeyCommand: HotKeyCombo] {
-        shortcutsByMergingDefaults(from: UserDefaults.standard.data(forKey: defaultsKey))
+        shortcutsByMergingDefaults(
+            from: UserDefaults.standard.data(forKey: defaultsKey)
+                ?? UserDefaults.standard.data(forKey: legacyDefaultsKey)
+        )
     }
 
     static func shortcutsByMergingDefaults(from data: Data?) -> [HotKeyCommand: HotKeyCombo] {

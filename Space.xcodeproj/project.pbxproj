@@ -12,24 +12,24 @@
 			containerPortal = C03BD8462FBAADEE00F9B945 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = C03BD84D2FBAADEE00F9B945;
-			remoteInfo = Squirrel;
+			remoteInfo = Space;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		C03BD84E2FBAADEE00F9B945 /* Squirrel.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Squirrel.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		C03BD85B2FBAADF000F9B945 /* SquirrelTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SquirrelTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C03BD84E2FBAADEE00F9B945 /* Space.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Space.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C03BD85B2FBAADF000F9B945 /* SpaceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SpaceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		C03BD8502FBAADEE00F9B945 /* Squirrel */ = {
+		C03BD8502FBAADEE00F9B945 /* Space */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Squirrel;
+			path = Space;
 			sourceTree = "<group>";
 		};
-		C03BD85E2FBAADF000F9B945 /* SquirrelTests */ = {
+		C03BD85E2FBAADF000F9B945 /* SpaceTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = SquirrelTests;
+			path = SpaceTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -55,8 +55,8 @@
 		C03BD8452FBAADEE00F9B945 = {
 			isa = PBXGroup;
 			children = (
-				C03BD8502FBAADEE00F9B945 /* Squirrel */,
-				C03BD85E2FBAADF000F9B945 /* SquirrelTests */,
+				C03BD8502FBAADEE00F9B945 /* Space */,
+				C03BD85E2FBAADF000F9B945 /* SpaceTests */,
 				C03BD84F2FBAADEE00F9B945 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -64,8 +64,8 @@
 		C03BD84F2FBAADEE00F9B945 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C03BD84E2FBAADEE00F9B945 /* Squirrel.app */,
-				C03BD85B2FBAADF000F9B945 /* SquirrelTests.xctest */,
+				C03BD84E2FBAADEE00F9B945 /* Space.app */,
+				C03BD85B2FBAADF000F9B945 /* SpaceTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -73,9 +73,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C03BD84D2FBAADEE00F9B945 /* Squirrel */ = {
+		C03BD84D2FBAADEE00F9B945 /* Space */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C03BD86F2FBAADF000F9B945 /* Build configuration list for PBXNativeTarget "Squirrel" */;
+			buildConfigurationList = C03BD86F2FBAADF000F9B945 /* Build configuration list for PBXNativeTarget "Space" */;
 			buildPhases = (
 				C03BD84A2FBAADEE00F9B945 /* Sources */,
 				C03BD84B2FBAADEE00F9B945 /* Frameworks */,
@@ -86,18 +86,18 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				C03BD8502FBAADEE00F9B945 /* Squirrel */,
+				C03BD8502FBAADEE00F9B945 /* Space */,
 			);
-			name = Squirrel;
+			name = Space;
 			packageProductDependencies = (
 			);
-			productName = Squirrel;
-			productReference = C03BD84E2FBAADEE00F9B945 /* Squirrel.app */;
+			productName = Space;
+			productReference = C03BD84E2FBAADEE00F9B945 /* Space.app */;
 			productType = "com.apple.product-type.application";
 		};
-		C03BD85A2FBAADF000F9B945 /* SquirrelTests */ = {
+		C03BD85A2FBAADF000F9B945 /* SpaceTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C03BD8722FBAADF000F9B945 /* Build configuration list for PBXNativeTarget "SquirrelTests" */;
+			buildConfigurationList = C03BD8722FBAADF000F9B945 /* Build configuration list for PBXNativeTarget "SpaceTests" */;
 			buildPhases = (
 				C03BD8572FBAADF000F9B945 /* Sources */,
 				C03BD8582FBAADF000F9B945 /* Frameworks */,
@@ -109,13 +109,13 @@
 				C03BD85D2FBAADF000F9B945 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				C03BD85E2FBAADF000F9B945 /* SquirrelTests */,
+				C03BD85E2FBAADF000F9B945 /* SpaceTests */,
 			);
-			name = SquirrelTests;
+			name = SpaceTests;
 			packageProductDependencies = (
 			);
-			productName = SquirrelTests;
-			productReference = C03BD85B2FBAADF000F9B945 /* SquirrelTests.xctest */;
+			productName = SpaceTests;
+			productReference = C03BD85B2FBAADF000F9B945 /* SpaceTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -137,7 +137,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C03BD8492FBAADEE00F9B945 /* Build configuration list for PBXProject "Squirrel" */;
+			buildConfigurationList = C03BD8492FBAADEE00F9B945 /* Build configuration list for PBXProject "Space" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -151,8 +151,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C03BD84D2FBAADEE00F9B945 /* Squirrel */,
-				C03BD85A2FBAADF000F9B945 /* SquirrelTests */,
+				C03BD84D2FBAADEE00F9B945 /* Space */,
+				C03BD85A2FBAADF000F9B945 /* SpaceTests */,
 			);
 		};
 /* End PBXProject section */
@@ -194,7 +194,7 @@
 /* Begin PBXTargetDependency section */
 		C03BD85D2FBAADF000F9B945 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = C03BD84D2FBAADEE00F9B945 /* Squirrel */;
+			target = C03BD84D2FBAADEE00F9B945 /* Space */;
 			targetProxy = C03BD85C2FBAADF000F9B945 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -387,14 +387,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = onmyown.SquirrelTests;
+				PRODUCT_BUNDLE_IDENTIFIER = onmyown.SpaceTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Squirrel.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Squirrel";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Space.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Space";
 			};
 			name = Debug;
 		};
@@ -407,21 +407,21 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.4;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = onmyown.SquirrelTests;
+				PRODUCT_BUNDLE_IDENTIFIER = onmyown.SpaceTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Squirrel.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Squirrel";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Space.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Space";
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		C03BD8492FBAADEE00F9B945 /* Build configuration list for PBXProject "Squirrel" */ = {
+		C03BD8492FBAADEE00F9B945 /* Build configuration list for PBXProject "Space" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C03BD86D2FBAADF000F9B945 /* Debug */,
@@ -430,7 +430,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C03BD86F2FBAADF000F9B945 /* Build configuration list for PBXNativeTarget "Squirrel" */ = {
+		C03BD86F2FBAADF000F9B945 /* Build configuration list for PBXNativeTarget "Space" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C03BD8702FBAADF000F9B945 /* Debug */,
@@ -439,7 +439,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C03BD8722FBAADF000F9B945 /* Build configuration list for PBXNativeTarget "SquirrelTests" */ = {
+		C03BD8722FBAADF000F9B945 /* Build configuration list for PBXNativeTarget "SpaceTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C03BD8732FBAADF000F9B945 /* Debug */,

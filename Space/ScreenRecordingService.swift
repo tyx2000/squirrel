@@ -258,7 +258,7 @@ final class ScreenRecordingService: ObservableObject {
         isShowingPermissionGuide = true
         let alert = NSAlert()
         alert.messageText = "Screen Recording Access Required"
-        alert.informativeText = "Enable Squirrel in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app."
+        alert.informativeText = "Enable Space in System Settings > Privacy & Security > Screen & System Audio Recording, then relaunch the app."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
@@ -288,7 +288,7 @@ final class ScreenRecordingService: ObservableObject {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMddHHmmss"
-        let fileName = "Squirrel-\(formatter.string(from: Date())).mp4"
+        let fileName = "Space-\(formatter.string(from: Date())).mp4"
         return downloadsURL.appendingPathComponent(fileName)
     }
 
