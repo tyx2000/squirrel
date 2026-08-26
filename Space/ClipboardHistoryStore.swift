@@ -99,7 +99,7 @@ final class ClipboardHistoryStore: ObservableObject {
             return
         }
 
-        items.removeAll { $0.text == text }
+        items.removeAll { !$0.isImage && $0.text == text }
         items.insert(ClipboardItem(text: text, sourceApplicationName: sourceApplicationName, createdAt: date), at: 0)
         pruneHistory(now: date)
         save()
@@ -238,7 +238,7 @@ final class ClipboardHistoryStore: ObservableObject {
 
         promotedItem.createdAt = now
         promotedItem.updatedAt = now
-        items.removeAll { $0.text == promotedItem.text }
+        items.removeAll { !$0.isImage && $0.text == promotedItem.text }
         items.insert(promotedItem, at: 0)
         save()
     }

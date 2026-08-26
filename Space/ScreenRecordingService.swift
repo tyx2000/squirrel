@@ -79,6 +79,12 @@ final class ScreenRecordingService: ObservableObject {
             do {
                 try await recording.stop()
             } catch {
+                // The stream is already unusable, so drop it rather than leaving the
+                // toggle stuck in its stop branch forever.
+                if activeRecording === recording {
+                    activeRecording = nil
+                    isRecording = false
+                }
                 fail("Screen recording could not stop: \(error.localizedDescription)", onFailure: onFailure)
             }
         }
@@ -274,6 +280,7 @@ final class ScreenRecordingService: ObservableObject {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
             return
         }
+        MainWindowPresenter.shared.suspendAutoHideUntilReactivated()
         NSWorkspace.shared.open(url)
     }
 

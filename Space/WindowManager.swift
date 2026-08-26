@@ -30,6 +30,7 @@ final class WindowManager: ObservableObject {
     private let ownBundleIdentifier = Bundle.main.bundleIdentifier
     private let layoutAnimationDuration: TimeInterval = 0.18
     private let layoutAnimationSteps = 9
+    private var layoutAnimationGeneration = 0
     private static let fullScreenAttribute = "AXFullScreen" as CFString
 
     init() {
@@ -53,6 +54,7 @@ final class WindowManager: ObservableObject {
     }
 
     func requestAccessibilityPermission() {
+        MainWindowPresenter.shared.suspendAutoHideUntilReactivated()
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
         refreshAccessibilityTrust()
@@ -303,6 +305,7 @@ final class WindowManager: ObservableObject {
         guard let startFrame = accessibilityFrame(of: window) else { return nil }
         guard startFrame != targetFrame else { return nil }
 
+        let generation = beginLayoutAnimation()
         let firstProgress = 1.0 / Double(layoutAnimationSteps)
         let firstFrame = interpolate(from: startFrame, to: targetFrame, progress: easeOutCubic(firstProgress))
         let firstResult = set(window: window, frame: firstFrame)
@@ -311,17 +314,25 @@ final class WindowManager: ObservableObject {
             let progress = Double(step) / Double(layoutAnimationSteps)
             let frame = interpolate(from: startFrame, to: targetFrame, progress: easeOutCubic(progress))
             DispatchQueue.main.asyncAfter(deadline: .now() + layoutAnimationDuration * progress) { [weak self] in
-                _ = self?.set(window: window, frame: frame)
+                guard let self, self.layoutAnimationGeneration == generation else { return }
+                _ = self.set(window: window, frame: frame)
             }
         }
 
         return firstResult
     }
 
+    /// Newer layout commands invalidate the steps still queued for older ones.
+    private func beginLayoutAnimation() -> Int {
+        layoutAnimationGeneration &+= 1
+        return layoutAnimationGeneration
+    }
+
     private func animatePosition(window: AXUIElement, to targetOrigin: CGPoint) -> (succeeded: Bool, positionStatus: AXError)? {
         guard let startFrame = accessibilityFrame(of: window) else { return nil }
         guard startFrame.origin != targetOrigin else { return nil }
 
+        let generation = beginLayoutAnimation()
         let firstProgress = 1.0 / Double(layoutAnimationSteps)
         let firstOrigin = interpolate(from: startFrame.origin, to: targetOrigin, progress: easeOutCubic(firstProgress))
         let firstResult = set(window: window, position: firstOrigin)
@@ -330,7 +341,8 @@ final class WindowManager: ObservableObject {
             let progress = Double(step) / Double(layoutAnimationSteps)
             let origin = interpolate(from: startFrame.origin, to: targetOrigin, progress: easeOutCubic(progress))
             DispatchQueue.main.asyncAfter(deadline: .now() + layoutAnimationDuration * progress) { [weak self] in
-                _ = self?.set(window: window, position: origin)
+                guard let self, self.layoutAnimationGeneration == generation else { return }
+                _ = self.set(window: window, position: origin)
             }
         }
 

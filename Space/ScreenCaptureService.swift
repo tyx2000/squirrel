@@ -15,6 +15,7 @@ final class ScreenCaptureService: ObservableObject {
     private var overlayController: CaptureOverlayController?
     private var isPreparingCapture = false
     private var isShowingPermissionGuide = false
+    private static let windowHideSettleNanoseconds: UInt64 = 120_000_000
 
     init(clipboardStore: ClipboardHistoryStore) {
         self.clipboardStore = clipboardStore
@@ -33,12 +34,19 @@ final class ScreenCaptureService: ObservableObject {
         }
 
         MainWindowPresenter.shared.beginCapturePresentation()
+        let didHideWindow = MainWindowPresenter.shared.hideClipboardWindow()
         isPreparingCapture = true
 
         Task { @MainActor in
             defer { isPreparingCapture = false }
 
             do {
+                // orderOut only reaches the display on the next flush, so let the window
+                // leave the screen before it gets frozen into the snapshot.
+                if didHideWindow {
+                    try? await Task.sleep(nanoseconds: Self.windowHideSettleNanoseconds)
+                }
+
                 guard let captureScreen = Self.screenContainingMouse(from: NSScreen.screens) else {
                     MainWindowPresenter.shared.endCapturePresentation()
                     fail("Capture Area could not identify the selected screen.", onFailure: onFailure)
@@ -121,6 +129,7 @@ final class ScreenCaptureService: ObservableObject {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
             return
         }
+        MainWindowPresenter.shared.suspendAutoHideUntilReactivated()
         NSWorkspace.shared.open(url)
     }
 

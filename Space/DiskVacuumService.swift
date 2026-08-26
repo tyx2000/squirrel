@@ -11,6 +11,17 @@ enum VacuumItemKind: String, Sendable {
     case simulator = "Simulator"
     case applicationSupport = "Application Support"
     case largeFile = "Large File"
+
+    /// Entries that hold real user or app data. Caches regenerate themselves; these do not,
+    /// so they are never selected by a single click on their category.
+    var isUserData: Bool {
+        switch self {
+        case .cache, .log, .derivedData:
+            return false
+        case .archive, .simulator, .applicationSupport, .largeFile:
+            return true
+        }
+    }
 }
 
 struct VacuumScanItem: Identifiable, Equatable, Sendable {
@@ -36,12 +47,20 @@ final class DiskVacuumService: ObservableObject {
     @Published private(set) var currentPath: String?
     @Published private(set) var lastMessage: String?
 
+    private var scanTask: Task<Void, Never>?
+
     var totalScannedBytes: UInt64 {
         items.reduce(0) { $0 + $1.sizeBytes }
     }
 
     var selectedBytes: UInt64 {
         Self.selectedLeafItems(in: items).reduce(0) { $0 + $1.sizeBytes }
+    }
+
+    var selectedUserDataTitles: [String] {
+        Self.selectedLeafItems(in: items)
+            .filter { $0.kind.isUserData }
+            .map(\.title)
     }
 
     func scan() {
@@ -52,20 +71,34 @@ final class DiskVacuumService: ObservableObject {
         lastMessage = nil
         items = []
 
-        Task.detached(priority: .utility) {
+        scanTask = Task.detached(priority: .utility) {
             let result = VacuumScanner.scan { path in
                 Task { @MainActor in
                     self.currentPath = path
                 }
             }
+            let wasCancelled = Task.isCancelled
 
             await MainActor.run {
-                self.items = result
+                self.scanTask = nil
                 self.currentPath = nil
                 self.isScanning = false
+
+                guard !wasCancelled else {
+                    self.items = []
+                    self.lastMessage = "Scan cancelled."
+                    return
+                }
+
+                self.items = result
                 self.lastMessage = result.isEmpty ? "No cleanup candidates found." : "Scan complete."
             }
         }
+    }
+
+    func cancelScan() {
+        guard isScanning else { return }
+        scanTask?.cancel()
     }
 
     func clearMessage() {
@@ -80,6 +113,10 @@ final class DiskVacuumService: ObservableObject {
 
     func setSelected(_ selected: Bool, for id: String) {
         items = Self.updating(items, id: id) { item in
+            // Selecting an entire user-data category in one click is too easy to do by
+            // accident; those children have to be picked individually. Clearing is always safe.
+            guard !selected || !item.hasChildren || !item.kind.isUserData else { return }
+
             item.isSelected = selected
             item.children = item.children.map { child in
                 var updatedChild = child
@@ -100,9 +137,9 @@ final class DiskVacuumService: ObservableObject {
         isCleaning = true
         lastMessage = nil
         let selectedIDs = Set(selectedItems.map(\.id))
-        let urls = Self.uniqueCleanupURLs(for: selectedItems)
+        let targets = Self.uniqueCleanupTargets(for: selectedItems)
 
-        guard !urls.isEmpty else {
+        guard !targets.isEmpty else {
             isCleaning = false
             items = Self.removingEmptyCategories(from: items)
             lastMessage = "The selected items are no longer available. Run a new scan."
@@ -113,13 +150,11 @@ final class DiskVacuumService: ObservableObject {
             var removedPaths = Set<String>()
             var failures: [CleanFailure] = []
 
-            for url in urls {
-                do {
-                    var resultingURL: NSURL?
-                    try FileManager.default.trashItem(at: url, resultingItemURL: &resultingURL)
-                    removedPaths.insert(url.path)
-                } catch {
-                    failures.append(CleanFailure(path: url.path, reason: error.localizedDescription))
+            for target in targets {
+                if let failure = Self.remove(target) {
+                    failures.append(failure)
+                } else {
+                    removedPaths.insert(target.url.path)
                 }
             }
 
@@ -168,16 +203,68 @@ final class DiskVacuumService: ObservableObject {
         }
     }
 
-    private nonisolated static func uniqueCleanupURLs(for items: [VacuumScanItem]) -> [URL] {
-        let sortedURLs = items
-            .compactMap { $0.path.map { URL(fileURLWithPath: $0).standardizedFileURL } }
-            .sorted { $0.path.count < $1.path.count }
+    private nonisolated static func uniqueCleanupTargets(for items: [VacuumScanItem]) -> [CleanupTarget] {
+        let sortedTargets = items
+            .compactMap { item in
+                item.path.map { CleanupTarget(url: URL(fileURLWithPath: $0).standardizedFileURL, kind: item.kind) }
+            }
+            .sorted { $0.url.path.count < $1.url.path.count }
 
-        var kept: [URL] = []
-        for url in sortedURLs where !isCovered(url.path, by: kept.map(\.path)) {
-            kept.append(url)
+        var kept: [CleanupTarget] = []
+        for target in sortedTargets where !isCovered(target.url.path, by: kept.map(\.url.path)) {
+            kept.append(target)
         }
         return kept
+    }
+
+    private nonisolated static func remove(_ target: CleanupTarget) -> CleanFailure? {
+        // Trashing a simulator's directory leaves CoreSimulator's device set pointing at a
+        // device that no longer exists, so hand those to simctl instead.
+        if target.kind == .simulator, let udid = simulatorUDID(for: target.url) {
+            return deleteSimulator(udid: udid, path: target.url.path)
+        }
+
+        do {
+            var resultingURL: NSURL?
+            try FileManager.default.trashItem(at: target.url, resultingItemURL: &resultingURL)
+            return nil
+        } catch {
+            return CleanFailure(path: target.url.path, reason: error.localizedDescription)
+        }
+    }
+
+    private nonisolated static func simulatorUDID(for url: URL) -> String? {
+        let name = url.lastPathComponent
+        return UUID(uuidString: name) != nil ? name : nil
+    }
+
+    private nonisolated static func deleteSimulator(udid: String, path: String) -> CleanFailure? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        process.arguments = ["simctl", "delete", udid]
+        let errorPipe = Pipe()
+        process.standardOutput = Pipe()
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+            // Drain before waiting so a chatty simctl cannot fill the pipe and deadlock.
+            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+
+            guard process.terminationStatus != 0 else { return nil }
+
+            let reason = String(data: errorData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return CleanFailure(
+                path: path,
+                reason: reason?.isEmpty == false
+                    ? reason!
+                    : "simctl delete exited with code \(process.terminationStatus)."
+            )
+        } catch {
+            return CleanFailure(path: path, reason: error.localizedDescription)
+        }
     }
 
     nonisolated static func isCovered(_ path: String, by paths: some Sequence<String>) -> Bool {
@@ -310,7 +397,15 @@ private enum VacuumScanner {
             )
         ]
 
-        var items = targets.compactMap { scanTarget($0, progress: progress) }
+        var items: [VacuumScanItem] = []
+        for target in targets {
+            if Task.isCancelled { return [] }
+            if let item = scanTarget(target, progress: progress) {
+                items.append(item)
+            }
+        }
+
+        if Task.isCancelled { return [] }
 
         if let largeFiles = scanLargeFiles(
             roots: [
@@ -334,6 +429,19 @@ private enum VacuumScanner {
 
         let children = directChildren(of: target.url)
             .map { url -> VacuumScanItem in
+                if Task.isCancelled {
+                    return VacuumScanItem(
+                        id: url.path,
+                        title: displayName(for: url),
+                        path: url.path,
+                        kind: target.kind,
+                        sizeBytes: 0,
+                        isSelected: false,
+                        isExpanded: false,
+                        children: []
+                    )
+                }
+
                 progress(url.path)
                 let size = allocatedSize(of: url, progress: progress)
                 return VacuumScanItem(
@@ -412,6 +520,7 @@ private enum VacuumScanner {
         for case let url as URL in enumerator {
             scannedCount += 1
             if scannedCount % 200 == 0 {
+                if Task.isCancelled { return [] }
                 progress(url.path)
             }
 
@@ -486,6 +595,7 @@ private enum VacuumScanner {
         for case let childURL as URL in enumerator {
             scannedCount += 1
             if scannedCount % 250 == 0 {
+                if Task.isCancelled { return total }
                 progress(childURL.path)
             }
 
@@ -516,6 +626,11 @@ private struct ScanTarget {
     let url: URL
     let kind: VacuumItemKind
     let defaultSelected: Bool
+}
+
+private struct CleanupTarget: Sendable {
+    let url: URL
+    let kind: VacuumItemKind
 }
 
 private struct CleanResult: Sendable {

@@ -13,6 +13,7 @@ final class MainWindowPresenter {
     private let windowDelegate = MainWindowDelegate()
     private var shouldShowWhenAvailable = false
     private var isSuppressingWindowPresentation = false
+    private var isAutoHideSuspended = false
     private let animationDuration: TimeInterval = 0.16
     private let windowSize = NSSize(width: 1080, height: 720)
 
@@ -23,11 +24,34 @@ final class MainWindowPresenter {
             name: NSApplication.didResignActiveNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
+    }
+
+    /// Keeps the window on screen across the next deactivation, for flows that hand focus
+    /// to another app on the user's behalf (opening System Settings, for example).
+    func suspendAutoHideUntilReactivated() {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.suspendAutoHideUntilReactivated()
+            }
+            return
+        }
+
+        isAutoHideSuspended = true
     }
 
     @objc private func applicationDidResignActive() {
-        guard !isSuppressingWindowPresentation else { return }
+        guard !isSuppressingWindowPresentation, !isAutoHideSuspended else { return }
         hideClipboardWindow()
+    }
+
+    @objc private func applicationDidBecomeActive() {
+        isAutoHideSuspended = false
     }
 
     func configure(services: AppServices) {
@@ -123,20 +147,24 @@ final class MainWindowPresenter {
         isSuppressingWindowPresentation = false
     }
 
-    func hideClipboardWindow(_ window: NSWindow? = nil) {
+    /// Returns whether a visible window was taken off screen. Callers that need the
+    /// answer must be on the main thread; off-thread calls hide asynchronously and report false.
+    @discardableResult
+    func hideClipboardWindow(_ window: NSWindow? = nil) -> Bool {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
                 self?.hideClipboardWindow(window)
             }
-            return
+            return false
         }
 
-        guard let window = window ?? self.window else { return }
-        guard window.isVisible else { return }
+        guard let window = window ?? self.window else { return false }
+        guard window.isVisible else { return false }
 
         shouldShowWhenAvailable = false
         NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
         window.orderOut(nil)
+        return true
     }
 
     private func makeWindow() -> NSWindow? {

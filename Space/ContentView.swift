@@ -8,6 +8,7 @@
 
 import SwiftUI
 import AppKit
+import ImageIO
 
 private enum AppPalette {
     static let windowBackground = Color(red: 0.965, green: 0.969, blue: 0.976)
@@ -407,6 +408,15 @@ private struct ShortcutRecorderGroupView: View {
 
 private struct VacuumView: View {
     @EnvironmentObject private var diskVacuumService: DiskVacuumService
+    @State private var isConfirmingClean = false
+
+    private var userDataWarning: String {
+        let titles = diskVacuumService.selectedUserDataTitles
+        let listed = titles.prefix(3).joined(separator: ", ")
+        let remainder = titles.count - min(titles.count, 3)
+        let suffix = remainder > 0 ? " (+\(remainder) more)" : ""
+        return "\(titles.count) selected item(s) hold app or user data, not caches: \(listed)\(suffix). They will be moved to Trash."
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -430,12 +440,32 @@ private struct VacuumView: View {
                     }
                     .disabled(diskVacuumService.isScanning || diskVacuumService.isCleaning)
 
+                    if diskVacuumService.isScanning {
+                        Button {
+                            diskVacuumService.cancelScan()
+                        } label: {
+                            Label("Stop", systemImage: "xmark")
+                        }
+                    }
+
                     Button {
-                        diskVacuumService.cleanSelected()
+                        if diskVacuumService.selectedUserDataTitles.isEmpty {
+                            diskVacuumService.cleanSelected()
+                        } else {
+                            isConfirmingClean = true
+                        }
                     } label: {
                         Label("Clean", systemImage: "trash")
                     }
                     .disabled(diskVacuumService.selectedBytes == 0 || diskVacuumService.isScanning || diskVacuumService.isCleaning)
+                    .alert("Move selected items to Trash?", isPresented: $isConfirmingClean) {
+                        Button("Cancel", role: .cancel) {}
+                        Button("Move to Trash", role: .destructive) {
+                            diskVacuumService.cleanSelected()
+                        }
+                    } message: {
+                        Text(userDataWarning)
+                    }
                 }
 
                 if let currentPath = diskVacuumService.currentPath {
@@ -567,12 +597,19 @@ private struct VacuumItemRow: View {
                     .foregroundStyle(AppPalette.secondaryText)
                     .frame(width: 84, alignment: .trailing)
 
-                Toggle("", isOn: Binding(
-                    get: { item.isSelected },
-                    set: { diskVacuumService.setSelected($0, for: item.id) }
-                ))
-                .toggleStyle(.checkbox)
-                .labelsHidden()
+                if item.hasChildren, item.kind.isUserData, !item.isSelected {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(AppTypography.icon)
+                        .foregroundStyle(.orange)
+                        .help("Holds app or user data — select entries individually.")
+                } else {
+                    Toggle("", isOn: Binding(
+                        get: { item.isSelected },
+                        set: { diskVacuumService.setSelected($0, for: item.id) }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                }
             }
             .padding(.leading, CGFloat(level) * 28)
             .padding(.horizontal, 12)
@@ -706,29 +743,62 @@ private struct ClipboardImagePreview: View {
         .frame(maxWidth: .infinity, maxHeight: 230, alignment: .leading)
         .background(Color.white.opacity(0.55))
         .clipShape(RoundedRectangle(cornerRadius: 6))
-        .onAppear {
-            image = loadOriginalImage()
-        }
-        .onChange(of: imageID) { _, _ in
-            image = loadOriginalImage()
+        .task(id: imageID) {
+            await loadThumbnail()
         }
         .onDisappear {
             image = nil
         }
     }
 
-    private func loadOriginalImage() -> NSImage? {
+    // Full-size screenshots reach 16MP, so decode a display-sized thumbnail off the
+    // main thread instead of blocking the scroll on a full decode.
+    private func loadThumbnail() async {
+        let imageURL = imageURLProvider()
+        let imageData = imageURL == nil ? imageDataProvider() : nil
+        guard imageURL != nil || imageData != nil else {
+            image = nil
+            return
+        }
+
+        let thumbnail = await Task.detached(priority: .userInitiated) {
+            Self.downsampledImage(url: imageURL, data: imageData)
+        }.value
+
+        guard !Task.isCancelled else { return }
+        image = thumbnail
+    }
+
+    private static let thumbnailMaxPixelSize = 1800
+
+    private static func downsampledImage(url: URL?, data: Data?) -> NSImage? {
         autoreleasepool {
-            if let imageURL = imageURLProvider(),
-               let image = NSImage(contentsOf: imageURL) {
-                return image
+            let source: CGImageSource?
+            if let url {
+                source = CGImageSourceCreateWithURL(url as CFURL, nil)
+            } else if let data {
+                source = CGImageSourceCreateWithData(data as CFData, nil)
+            } else {
+                source = nil
             }
 
-            if let imageData = imageDataProvider() {
-                return NSImage(data: imageData)
+            guard let source else { return nil }
+
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: thumbnailMaxPixelSize
+            ]
+
+            guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+                return nil
             }
 
-            return nil
+            return NSImage(
+                cgImage: thumbnail,
+                size: NSSize(width: thumbnail.width, height: thumbnail.height)
+            )
         }
     }
 }

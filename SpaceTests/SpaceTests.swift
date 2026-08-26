@@ -95,6 +95,38 @@ struct SpaceTests {
         try? FileManager.default.removeItem(at: directory)
     }
 
+    @Test func copyingTextNamedImageKeepsImageHistoryAndItsFiles() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storageURL = directory.appendingPathComponent("clipboard-history.json")
+        let imageData = try #require(Self.testImageData())
+
+        let store = ClipboardHistoryStore(storageURL: storageURL)
+        store.addImageData(imageData, at: Date())
+        let imageItem = try #require(store.items.first)
+        let imageURL = try #require(store.imageURL(for: imageItem))
+
+        // Image items carry the literal text "Image", which text dedup must not match.
+        store.addText("Image", at: Date())
+
+        #expect(store.items.filter(\.isImage).count == 1)
+        #expect(FileManager.default.fileExists(atPath: imageURL.path))
+
+        let textItem = try #require(store.items.first { !$0.isImage })
+        store.promoteItem(textItem)
+
+        #expect(store.items.filter(\.isImage).count == 1)
+        #expect(FileManager.default.fileExists(atPath: imageURL.path))
+
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    @Test func vacuumRefusesToSelectAWholeUserDataCategory() async throws {
+        #expect(VacuumItemKind.applicationSupport.isUserData)
+        #expect(VacuumItemKind.simulator.isUserData)
+        #expect(VacuumItemKind.cache.isUserData == false)
+    }
+
     @Test func clipboardHistoryRejectsImageDataWhenDiskStorageUnavailable() async throws {
         // storageURL: nil → no disk backing → image storage must fail gracefully.
         let store = ClipboardHistoryStore(storageURL: nil)
