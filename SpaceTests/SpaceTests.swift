@@ -457,6 +457,97 @@ struct SpaceTests {
         #expect(updatedCategory.isSelected == false)
     }
 
+    @Test func capturePixelCoordinateFlipsViewPointAndAppliesBackingScale() async throws {
+        let pointSize = CGSize(width: 100, height: 50)
+        let pixelSize = CGSize(width: 200, height: 100)
+
+        // Bottom-left in view coordinates is the last pixel row of the image.
+        let bottomLeft = try #require(CaptureColorSampler.pixelCoordinate(
+            forViewPoint: CGPoint(x: 0, y: 0),
+            snapshotPointSize: pointSize,
+            snapshotPixelSize: pixelSize
+        ))
+        #expect(bottomLeft.x == 0)
+        #expect(bottomLeft.y == 99)
+
+        let topRight = try #require(CaptureColorSampler.pixelCoordinate(
+            forViewPoint: CGPoint(x: 99.5, y: 49.5),
+            snapshotPointSize: pointSize,
+            snapshotPixelSize: pixelSize
+        ))
+        #expect(topRight.x == 199)
+        #expect(topRight.y == 1)
+
+        #expect(CaptureColorSampler.pixelCoordinate(
+            forViewPoint: CGPoint(x: -1, y: 10),
+            snapshotPointSize: pointSize,
+            snapshotPixelSize: pixelSize
+        ) == nil)
+        // The top edge itself is in bounds and samples the first pixel row.
+        let topEdge = try #require(CaptureColorSampler.pixelCoordinate(
+            forViewPoint: CGPoint(x: 10, y: 50),
+            snapshotPointSize: pointSize,
+            snapshotPixelSize: pixelSize
+        ))
+        #expect(topEdge.y == 0)
+
+        #expect(CaptureColorSampler.pixelCoordinate(
+            forViewPoint: CGPoint(x: 10, y: 50.5),
+            snapshotPointSize: pointSize,
+            snapshotPixelSize: pixelSize
+        ) == nil)
+    }
+
+    @Test func captureColorSamplerReadsThePixelUnderThePoint() async throws {
+        // Top half red, bottom half blue, at 2x backing scale.
+        let image = try #require(Self.twoToneImage(
+            top: NSColor(srgbRed: 1, green: 0, blue: 0, alpha: 1),
+            bottom: NSColor(srgbRed: 0, green: 0, blue: 1, alpha: 1),
+            pixelSize: CGSize(width: 4, height: 4)
+        ))
+        let pointSize = CGSize(width: 2, height: 2)
+
+        let nearTop = try #require(CaptureColorSampler.color(
+            in: image,
+            atViewPoint: CGPoint(x: 1, y: 1.5),
+            snapshotPointSize: pointSize
+        ))
+        #expect(nearTop == CaptureSampledColor(red: 255, green: 0, blue: 0))
+        #expect(nearTop.text(in: .hex) == "#FF0000")
+        #expect(nearTop.text(in: .rgb) == "rgb(255, 0, 0)")
+
+        let nearBottom = try #require(CaptureColorSampler.color(
+            in: image,
+            atViewPoint: CGPoint(x: 1, y: 0.5),
+            snapshotPointSize: pointSize
+        ))
+        #expect(nearBottom == CaptureSampledColor(red: 0, green: 0, blue: 255))
+    }
+
+    private static func twoToneImage(top: NSColor, bottom: NSColor, pixelSize: CGSize) -> CGImage? {
+        let width = Int(pixelSize.width)
+        let height = Int(pixelSize.height)
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return nil
+        }
+
+        // CGContext draws bottom-up, so the second fill lands in the image's top rows.
+        context.setFillColor(bottom.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height / 2))
+        context.setFillColor(top.cgColor)
+        context.fill(CGRect(x: 0, y: height / 2, width: width, height: height - height / 2))
+        return context.makeImage()
+    }
+
     private static func testImageData(color: NSColor = .red) -> Data? {
         let image = NSImage(size: NSSize(width: 2, height: 2))
         image.lockFocus()

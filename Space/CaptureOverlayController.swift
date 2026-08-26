@@ -28,6 +28,39 @@ enum CaptureOutputAction {
     case copy
 }
 
+enum CaptureColorFormat {
+    case hex
+    case rgb
+
+    mutating func toggle() {
+        self = self == .hex ? .rgb : .hex
+    }
+}
+
+struct CaptureSampledColor: Equatable {
+    var red: UInt8
+    var green: UInt8
+    var blue: UInt8
+
+    func text(in format: CaptureColorFormat) -> String {
+        switch format {
+        case .hex:
+            return String(format: "#%02X%02X%02X", Int(red), Int(green), Int(blue))
+        case .rgb:
+            return "rgb(\(red), \(green), \(blue))"
+        }
+    }
+
+    var color: NSColor {
+        NSColor(
+            srgbRed: CGFloat(red) / 255,
+            green: CGFloat(green) / 255,
+            blue: CGFloat(blue) / 255,
+            alpha: 1
+        )
+    }
+}
+
 enum CaptureResizeHandle: CaseIterable {
     case topLeft
     case top
@@ -112,6 +145,76 @@ enum CaptureResizeHandleGeometry {
         let dx = point.x - target.x
         let dy = point.y - target.y
         return dx * dx + dy * dy
+    }
+}
+
+/// Reads pixels from the frozen snapshot rather than from the screen, so the dimming
+/// overlay and the selection border never tint the reported colour.
+enum CaptureColorSampler {
+    static func pixelCoordinate(
+        forViewPoint point: CGPoint,
+        snapshotPointSize: CGSize,
+        snapshotPixelSize: CGSize
+    ) -> (x: Int, y: Int)? {
+        guard snapshotPointSize.width > 0, snapshotPointSize.height > 0 else { return nil }
+
+        let maxX = Int(snapshotPixelSize.width) - 1
+        let maxY = Int(snapshotPixelSize.height) - 1
+        guard maxX >= 0, maxY >= 0 else { return nil }
+
+        guard point.x >= 0, point.y >= 0,
+              point.x <= snapshotPointSize.width,
+              point.y <= snapshotPointSize.height else {
+            return nil
+        }
+
+        let scaleX = snapshotPixelSize.width / snapshotPointSize.width
+        let scaleY = snapshotPixelSize.height / snapshotPointSize.height
+        // View coordinates start at the bottom left; CGImage pixels start at the top left.
+        // The far edges land exactly one pixel past the image, so clamp instead of failing.
+        let x = min(max(Int((point.x * scaleX).rounded(.down)), 0), maxX)
+        let y = min(max(Int(((snapshotPointSize.height - point.y) * scaleY).rounded(.down)), 0), maxY)
+        return (x, y)
+    }
+
+    static func color(
+        in image: CGImage,
+        atViewPoint point: CGPoint,
+        snapshotPointSize: CGSize
+    ) -> CaptureSampledColor? {
+        guard let coordinate = pixelCoordinate(
+            forViewPoint: point,
+            snapshotPointSize: snapshotPointSize,
+            snapshotPixelSize: CGSize(width: image.width, height: image.height)
+        ) else {
+            return nil
+        }
+
+        guard let pixel = image.cropping(
+            to: CGRect(x: coordinate.x, y: coordinate.y, width: 1, height: 1)
+        ), let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else {
+            return nil
+        }
+
+        var pixelBytes = [UInt8](repeating: 0, count: 4)
+        return pixelBytes.withUnsafeMutableBytes { buffer -> CaptureSampledColor? in
+            guard let baseAddress = buffer.baseAddress,
+                  let context = CGContext(
+                    data: baseAddress,
+                    width: 1,
+                    height: 1,
+                    bitsPerComponent: 8,
+                    bytesPerRow: 4,
+                    space: colorSpace,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else {
+                return nil
+            }
+
+            context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            let bytes = buffer.bindMemory(to: UInt8.self)
+            return CaptureSampledColor(red: bytes[0], green: bytes[1], blue: bytes[2])
+        }
     }
 }
 
@@ -263,6 +366,17 @@ final class CaptureOverlayView: NSView {
     private let toolbarGap: CGFloat = 12
     private let toolbarButtonSize = CGSize(width: 28, height: 28)
     private let toolbarButtonSpacing: CGFloat = 8
+    private var colorSampleLocation: CGPoint?
+    private var sampledColor: CaptureSampledColor?
+    private var colorFormat: CaptureColorFormat = .hex
+    private var isShiftDown = false
+    private var copyConfirmationText: String?
+    private var copyConfirmationWorkItem: DispatchWorkItem?
+    private let copyConfirmationDuration: TimeInterval = 1.1
+    private let colorReadoutGap: CGFloat = 18
+    private let colorSwatchSize: CGFloat = 15
+    private let colorReadoutPadding: CGFloat = 8
+    private let colorReadoutFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
     private let toolbarBackgroundColor = NSColor(calibratedWhite: 0.98, alpha: 0.96)
     private let toolbarSelectedBackgroundColor = NSColor.systemRed.withAlphaComponent(0.16)
     private static let diagonalResizeDownCursor = makeDiagonalResizeCursor(flipped: false)
@@ -354,6 +468,7 @@ final class CaptureOverlayView: NSView {
         } else {
             dragCurrent = point
         }
+        updateColorSample(at: point)
         needsDisplay = true
     }
 
@@ -420,15 +535,72 @@ final class CaptureOverlayView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        updateCursor(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        updateCursor(at: point)
+        updateColorSample(at: point)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        super.flagsChanged(with: event)
+
+        let isShiftDownNow = event.modifierFlags.contains(.shift)
+        defer { isShiftDown = isShiftDownNow }
+        guard isShiftDownNow, !isShiftDown else { return }
+
+        let previousRect = colorReadoutRect()
+        colorFormat.toggle()
+        invalidateColorReadout(previousRect)
     }
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {
             closeCapture()
-        } else {
-            super.keyDown(with: event)
+            return
         }
+
+        // Matched by character rather than key code so it survives non-QWERTY layouts,
+        // and so Shift-held (RGB mode) still reads as "c".
+        if event.charactersIgnoringModifiers?.lowercased() == "c", copySampledColor() {
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    @discardableResult
+    private func copySampledColor() -> Bool {
+        guard let sampledColor else { return false }
+
+        let text = sampledColor.text(in: colorFormat)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        showCopyConfirmation(for: text)
+        return true
+    }
+
+    private func showCopyConfirmation(for text: String) {
+        copyConfirmationWorkItem?.cancel()
+
+        let previousRect = colorReadoutRect()
+        copyConfirmationText = text
+        invalidateColorReadout(previousRect)
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.clearCopyConfirmation()
+        }
+        copyConfirmationWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + copyConfirmationDuration, execute: workItem)
+    }
+
+    private func clearCopyConfirmation() {
+        guard copyConfirmationText != nil else { return }
+
+        copyConfirmationWorkItem?.cancel()
+        copyConfirmationWorkItem = nil
+        let previousRect = colorReadoutRect()
+        copyConfirmationText = nil
+        invalidateColorReadout(previousRect)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -452,6 +624,8 @@ final class CaptureOverlayView: NSView {
             NSColor.black.withAlphaComponent(0.26).setFill()
             bounds.fill()
         }
+
+        drawColorReadout()
     }
 
     private func drawFrozenSnapshot() {
@@ -854,6 +1028,111 @@ final class CaptureOverlayView: NSView {
                 fraction: 1
             )
         }
+    }
+
+    private func updateColorSample(at point: CGPoint) {
+        if colorConfirmationShouldClear(for: point) {
+            clearCopyConfirmation()
+        }
+
+        let previousRect = colorReadoutRect()
+
+        // The toolbar sits above the frozen image, so there is no meaningful colour there.
+        if selectionRect != nil, toolbarRect.contains(point) {
+            colorSampleLocation = nil
+            sampledColor = nil
+        } else {
+            colorSampleLocation = point
+            sampledColor = color(atViewPoint: point)
+        }
+
+        invalidateColorReadout(previousRect)
+    }
+
+    private func colorConfirmationShouldClear(for point: CGPoint) -> Bool {
+        guard copyConfirmationText != nil else { return false }
+        guard let colorSampleLocation else { return true }
+        return colorSampleLocation != point
+    }
+
+    private func invalidateColorReadout(_ previousRect: CGRect) {
+        let updatedRect = colorReadoutRect()
+        guard !previousRect.isEmpty || !updatedRect.isEmpty else { return }
+
+        // A full-screen redraw per mouse move is wasteful; only the pill moved.
+        let dirtyRect = previousRect.isEmpty
+            ? updatedRect
+            : (updatedRect.isEmpty ? previousRect : previousRect.union(updatedRect))
+        setNeedsDisplay(dirtyRect.insetBy(dx: -2, dy: -2))
+    }
+
+    private func color(atViewPoint point: CGPoint) -> CaptureSampledColor? {
+        CaptureColorSampler.color(
+            in: snapshot.fullResImage ?? snapshot.image,
+            atViewPoint: point,
+            snapshotPointSize: snapshot.pointSize
+        )
+    }
+
+    private var colorReadoutText: String? {
+        guard let sampledColor else { return nil }
+        if let copyConfirmationText {
+            return "\u{2713} \(copyConfirmationText)"
+        }
+        return sampledColor.text(in: colorFormat)
+    }
+
+    private func colorReadoutRect() -> CGRect {
+        guard let colorReadoutText, let colorSampleLocation else { return .zero }
+
+        let textSize = colorReadoutText.size(withAttributes: [.font: colorReadoutFont])
+        let size = CGSize(
+            width: colorReadoutPadding * 3 + colorSwatchSize + textSize.width,
+            height: max(textSize.height, colorSwatchSize) + colorReadoutPadding
+        )
+        let preferredRect = CGRect(
+            origin: CGPoint(
+                x: colorSampleLocation.x + colorReadoutGap,
+                y: colorSampleLocation.y - colorReadoutGap - size.height
+            ),
+            size: size
+        )
+        return clamp(preferredRect, to: bounds.insetBy(dx: 8, dy: 8))
+    }
+
+    private func drawColorReadout() {
+        guard let sampledColor, let text = colorReadoutText else { return }
+        let readoutRect = colorReadoutRect()
+        guard !readoutRect.isEmpty else { return }
+
+        NSColor.black.withAlphaComponent(0.72).setFill()
+        NSBezierPath(roundedRect: readoutRect, xRadius: 6, yRadius: 6).fill()
+
+        let swatchRect = CGRect(
+            x: readoutRect.minX + colorReadoutPadding,
+            y: readoutRect.midY - colorSwatchSize / 2,
+            width: colorSwatchSize,
+            height: colorSwatchSize
+        )
+        let swatchPath = NSBezierPath(roundedRect: swatchRect, xRadius: 3, yRadius: 3)
+        sampledColor.color.setFill()
+        swatchPath.fill()
+        NSColor.white.withAlphaComponent(0.55).setStroke()
+        swatchPath.lineWidth = 1
+        swatchPath.stroke()
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: colorReadoutFont,
+            .foregroundColor: NSColor.white
+        ]
+        let textSize = text.size(withAttributes: attributes)
+        text.draw(
+            at: CGPoint(
+                x: swatchRect.maxX + colorReadoutPadding,
+                y: readoutRect.midY - textSize.height / 2
+            ),
+            withAttributes: attributes
+        )
     }
 
     private func drawSizeLabel(for rect: CGRect) {
