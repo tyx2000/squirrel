@@ -238,14 +238,33 @@ final class MainWindowPresenter {
 }
 
 private final class MainWindow: NSWindow {
+    private enum Key {
+        static let escape: UInt16 = 53
+        static let returnKey: UInt16 = 36
+        static let keypadEnter: UInt16 = 76
+        static let upArrow: UInt16 = 126
+        static let downArrow: UInt16 = 125
+    }
+
     override var canBecomeKey: Bool { true }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 {
+        switch event.keyCode {
+        case Key.escape:
             MainWindowPresenter.shared.hideClipboardWindow(self)
-        } else {
+        case Key.upArrow:
+            post(.previous)
+        case Key.downArrow:
+            post(.next)
+        case Key.returnKey, Key.keypadEnter:
+            post(.copy)
+        default:
             super.keyDown(with: event)
         }
+    }
+
+    private func post(_ command: HistoryNavigationCommand) {
+        NotificationCenter.default.post(name: .historyNavigation, object: command)
     }
 
     override func cancelOperation(_ sender: Any?) {

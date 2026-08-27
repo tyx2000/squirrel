@@ -79,6 +79,7 @@ struct ContentView: View {
     @EnvironmentObject private var diskVacuumService: DiskVacuumService
 
     @State private var selectedTab: MainTab = .history
+    @State private var selectedItemID: UUID?
     @State private var isQuitButtonHovering = false
     @State private var hoveredWindowControl: WindowControl?
     @Namespace private var cardSortNamespace
@@ -117,6 +118,22 @@ struct ContentView: View {
             withAnimation(.easeInOut(duration: 0.18)) {
                 selectedTab = .history
             }
+            selectedItemID = clipboardStore.items.first?.id
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .historyNavigation)) { notification in
+            guard selectedTab == .history,
+                  let command = notification.object as? HistoryNavigationCommand else {
+                return
+            }
+            handle(command)
+        }
+        .onAppear {
+            selectedItemID = clipboardStore.items.first?.id
+        }
+        .onChange(of: clipboardStore.items.map(\.id)) { _, ids in
+            // A deleted or pruned selection falls back to the newest entry.
+            if let selectedItemID, ids.contains(selectedItemID) { return }
+            selectedItemID = ids.first
         }
     }
 
@@ -205,6 +222,47 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func handle(_ command: HistoryNavigationCommand) {
+        let items = clipboardStore.items
+        guard !items.isEmpty else { return }
+
+        switch command {
+        case .previous:
+            moveSelection(by: -1, in: items)
+        case .next:
+            moveSelection(by: 1, in: items)
+        case .copy:
+            copySelectedItem(in: items)
+        }
+    }
+
+    private func moveSelection(by offset: Int, in items: [ClipboardItem]) {
+        let currentIndex = selectedItemID.flatMap { id in
+            items.firstIndex { $0.id == id }
+        }
+
+        guard let currentIndex else {
+            selectedItemID = items.first?.id
+            return
+        }
+
+        let nextIndex = min(max(currentIndex + offset, 0), items.count - 1)
+        selectedItemID = items[nextIndex].id
+    }
+
+    private func copySelectedItem(in items: [ClipboardItem]) {
+        guard let selectedItemID,
+              let item = items.first(where: { $0.id == selectedItemID }),
+              clipboardStore.copyToPasteboard(item) else {
+            return
+        }
+
+        // Promotion moves the item to the top; selection follows it by id.
+        withAnimation(ClipboardLayout.resortAnimation) {
+            clipboardStore.promoteItem(item)
+        }
+    }
+
     private func closeWindow() {
         NSApp.keyWindow?.close()
     }
@@ -224,9 +282,11 @@ struct ContentView: View {
             ) { item in
                 ClipboardHistoryCard(
                     item: item,
+                    isSelected: item.id == selectedItemID,
                     imageURLProvider: { clipboardStore.imageURL(for: item) },
                     imageDataProvider: { clipboardStore.imageData(for: item) },
                     onCopy: {
+                        selectedItemID = item.id
                         guard clipboardStore.copyToPasteboard(item) else { return }
                         clipboardStore.promoteItem(item)
                     },
@@ -236,6 +296,9 @@ struct ContentView: View {
                         }
                     }
                 )
+                .onTapGesture {
+                    selectedItemID = item.id
+                }
             }
         case .vacuum:
             VacuumView()
@@ -254,16 +317,25 @@ struct ContentView: View {
             if items.isEmpty {
                 emptyState(title: emptyTitle, subtitle: emptySubtitle)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: ClipboardLayout.rowSpacing) {
-                        ForEach(items) { item in
-                            card(item)
-                                .matchedGeometryEffect(id: item.id, in: cardSortNamespace)
-                                .transition(.scale(scale: 0.94).combined(with: .opacity))
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: ClipboardLayout.rowSpacing) {
+                            ForEach(items) { item in
+                                card(item)
+                                    .id(item.id)
+                                    .matchedGeometryEffect(id: item.id, in: cardSortNamespace)
+                                    .transition(.scale(scale: 0.94).combined(with: .opacity))
+                            }
+                        }
+                        .padding(ClipboardLayout.contentPadding)
+                        .animation(ClipboardLayout.resortAnimation, value: items.map(\.id))
+                    }
+                    .onChange(of: selectedItemID) { _, id in
+                        guard let id else { return }
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            proxy.scrollTo(id, anchor: .center)
                         }
                     }
-                    .padding(ClipboardLayout.contentPadding)
-                    .animation(ClipboardLayout.resortAnimation, value: items.map(\.id))
                 }
             }
         }
@@ -633,6 +705,7 @@ private struct VacuumItemRow: View {
 
 private struct ClipboardHistoryCard: View {
     let item: ClipboardItem
+    let isSelected: Bool
     let imageURLProvider: () -> URL?
     let imageDataProvider: () -> Data?
     let onCopy: () -> Void
@@ -702,11 +775,14 @@ private struct ClipboardHistoryCard: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(AppPalette.cardBackground)
+                .fill(isSelected ? AppPalette.selectedTabBackground : AppPalette.cardBackground)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .stroke(AppPalette.separator.opacity(0.75), lineWidth: 1)
+                .stroke(
+                    isSelected ? Color.accentColor : AppPalette.separator.opacity(0.75),
+                    lineWidth: isSelected ? 2 : 1
+                )
         )
         .contentShape(Rectangle())
     }
