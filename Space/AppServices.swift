@@ -11,6 +11,7 @@ final class AppServices: ObservableObject {
     let screenCaptureService: ScreenCaptureService
     let screenRecordingService: ScreenRecordingService
     let diskVacuumService: DiskVacuumService
+    private let statusItemController = StatusItemController()
     private var latestLockScreenRequestID = UUID()
 
     init() {
@@ -26,6 +27,7 @@ final class AppServices: ObservableObject {
 
     private func configure() {
         clipboardStore.startMonitoring()
+        statusItemController.install()
 
         hotKeyManager.setAction(.clipboardWindow) {
             NotificationCenter.default.post(name: .openClipboardWindow, object: nil)

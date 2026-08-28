@@ -6,7 +6,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var services: AppServices?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        // Menu bar resident: the status item is the entry point, so no Dock icon
+        // and no Cmd-Tab entry.
+        NSApp.setActivationPolicy(.accessory)
         services = AppServices()
 
         NotificationCenter.default.addObserver(
