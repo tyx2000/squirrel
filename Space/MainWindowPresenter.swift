@@ -105,8 +105,9 @@ final class MainWindowPresenter {
             window.setFrame(targetFrame.offsetBy(dx: 0, dy: -10), display: false)
         }
 
-        NSApp.unhide(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Deliberately no NSApp.activate: a non-activating panel takes key status
+        // without making Space the active app, so whatever text field the user was
+        // typing in keeps its insertion point and gets it back when the panel hides.
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
 
@@ -117,11 +118,21 @@ final class MainWindowPresenter {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             guard !self.isSuppressingWindowPresentation else { return }
             guard window.isVisible else { return }
-            NSApp.activate(ignoringOtherApps: true)
             self.configureWindow(window)
             window.orderFrontRegardless()
             window.makeKeyAndOrderFront(nil)
             NotificationCenter.default.post(name: .showClipboardHistory, object: nil)
+        }
+    }
+
+    /// Called when the panel stops being the key window. A sheet or alert of our own
+    /// taking key leaves NSApp.keyWindow non-nil, and must not dismiss the panel.
+    func handleWindowResignedKey() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard !self.isSuppressingWindowPresentation, !self.isAutoHideSuspended else { return }
+            guard NSApp.keyWindow == nil else { return }
+            self.hideClipboardWindow()
         }
     }
 
@@ -183,7 +194,7 @@ final class MainWindowPresenter {
 
         let window = MainWindow(
             contentRect: initialFrame(),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: true
         )
@@ -224,8 +235,9 @@ final class MainWindowPresenter {
         window.standardWindowButton(.closeButton)?.isHidden = true
         window.standardWindowButton(.miniaturizeButton)?.isHidden = true
         window.standardWindowButton(.zoomButton)?.isHidden = true
-        window.level = .normal
-        window.collectionBehavior = [.transient, .ignoresCycle]
+        // Floating so it stays above the window of the app that is still active.
+        window.level = .floating
+        window.collectionBehavior = [.transient, .ignoresCycle, .moveToActiveSpace]
     }
 
     private func animate(window: NSWindow, toAlpha alpha: CGFloat, frame: NSRect) {
@@ -238,7 +250,7 @@ final class MainWindowPresenter {
     }
 }
 
-private final class MainWindow: NSWindow {
+private final class MainWindow: NSPanel {
     private enum Key {
         static let escape: UInt16 = 53
         static let returnKey: UInt16 = 36
@@ -248,6 +260,7 @@ private final class MainWindow: NSWindow {
     }
 
     override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
@@ -281,5 +294,9 @@ private final class MainWindowDelegate: NSObject, NSWindowDelegate {
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         NSSize(width: 1080, height: 720)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        MainWindowPresenter.shared.handleWindowResignedKey()
     }
 }
