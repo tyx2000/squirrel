@@ -30,6 +30,12 @@ final class MainWindowPresenter {
             name: NSApplication.didBecomeActiveNotification,
             object: nil
         )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(workspaceDidActivateApplication(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
     }
 
     /// Keeps the window on screen across the next deactivation, for flows that hand focus
@@ -51,6 +57,12 @@ final class MainWindowPresenter {
     }
 
     @objc private func applicationDidBecomeActive() {
+        isAutoHideSuspended = false
+    }
+
+    /// The suspension lasts until the user comes back to the panel. Relying on
+    /// didBecomeActive alone would strand it, since this app no longer activates.
+    func handleWindowBecameKey() {
         isAutoHideSuspended = false
     }
 
@@ -125,15 +137,32 @@ final class MainWindowPresenter {
         }
     }
 
-    /// Called when the panel stops being the key window. A sheet or alert of our own
-    /// taking key leaves NSApp.keyWindow non-nil, and must not dismiss the panel.
+    /// Called when the panel stops being the key window.
     func handleWindowResignedKey() {
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, let window = self.window else { return }
             guard !self.isSuppressingWindowPresentation, !self.isAutoHideSuspended else { return }
-            guard NSApp.keyWindow == nil else { return }
+
+            // Only the panel's own sheet, or an app-modal alert, may keep it on screen.
+            // Testing NSApp.keyWindow for nil was too broad: clicking the menu bar item
+            // makes the status bar's window key, which silently cancelled the hide and
+            // left the panel stuck visible with no further resign-key to recover from.
+            if let modalWindow = NSApp.modalWindow, modalWindow !== window { return }
+            if let keyWindow = NSApp.keyWindow, keyWindow === window || keyWindow.sheetParent === window {
+                return
+            }
+
             self.hideClipboardWindow()
         }
+    }
+
+    /// Key status is not a reliable signal on its own: the panel can end up visible but
+    /// not key, and then never resigns anything. Another app coming forward is.
+    @objc private func workspaceDidActivateApplication(_ notification: Notification) {
+        let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        guard application?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+        guard !isSuppressingWindowPresentation, !isAutoHideSuspended else { return }
+        hideClipboardWindow()
     }
 
     func beginCapturePresentation() {
@@ -299,4 +328,9 @@ private final class MainWindowDelegate: NSObject, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         MainWindowPresenter.shared.handleWindowResignedKey()
     }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        MainWindowPresenter.shared.handleWindowBecameKey()
+    }
+
 }
