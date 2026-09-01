@@ -77,6 +77,7 @@ struct ContentView: View {
     @EnvironmentObject private var screenCaptureService: ScreenCaptureService
     @EnvironmentObject private var screenRecordingService: ScreenRecordingService
     @EnvironmentObject private var diskVacuumService: DiskVacuumService
+    @EnvironmentObject private var loginItemService: LoginItemService
 
     @State private var selectedTab: MainTab = .history
     @State private var selectedItemID: UUID?
@@ -382,6 +383,32 @@ struct ContentView: View {
                     }
                     Button("Check") {
                         windowManager.refreshPermissionStatus()
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    Toggle(isOn: Binding(
+                        get: { loginItemService.isEnabled },
+                        set: { loginItemService.setEnabled($0) }
+                    )) {
+                        Label("Open Space at Login", systemImage: "power")
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    Spacer(minLength: 12)
+                    Button("Check") {
+                        loginItemService.refresh()
+                    }
+                }
+
+                if let loginMessage = loginItemService.lastMessage {
+                    HStack(spacing: 10) {
+                        Label(loginMessage, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.orange)
+                        Spacer(minLength: 12)
+                        Button("Dismiss") {
+                            loginItemService.clearMessage()
+                        }
                     }
                 }
 

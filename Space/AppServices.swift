@@ -11,6 +11,7 @@ final class AppServices: ObservableObject {
     let screenCaptureService: ScreenCaptureService
     let screenRecordingService: ScreenRecordingService
     let diskVacuumService: DiskVacuumService
+    let loginItemService: LoginItemService
     private let statusItemController = StatusItemController()
     private var latestLockScreenRequestID = UUID()
 
@@ -21,6 +22,7 @@ final class AppServices: ObservableObject {
         screenCaptureService = ScreenCaptureService(clipboardStore: clipboardStore)
         screenRecordingService = ScreenRecordingService()
         diskVacuumService = DiskVacuumService()
+        loginItemService = LoginItemService()
 
         configure()
     }

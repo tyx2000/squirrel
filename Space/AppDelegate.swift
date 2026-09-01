@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         openClipboardWindow()
+        services?.loginItemService.promptIfNeeded()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
