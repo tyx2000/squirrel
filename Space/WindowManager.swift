@@ -59,10 +59,19 @@ final class WindowManager: ObservableObject {
         // notification the prompt may never post.
         MainWindowPresenter.shared.hideClipboardWindow()
 
+        // The system prompt registers this app in the Accessibility list and carries its
+        // own button through to System Settings. Opening Settings here as well put two
+        // windows up from one click, with the prompt buried behind them.
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        AXIsProcessTrustedWithOptions(options)
+        let isTrusted = AXIsProcessTrustedWithOptions(options)
         refreshAccessibilityTrust()
-        openAccessibilitySettings()
+
+        // Access is already granted, so no prompt appears; take the user to the pane
+        // the button offered instead of doing nothing.
+        if isTrusted {
+            openAccessibilitySettings()
+        }
+
         updateAccessibilityMessageIfNeeded()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             self?.refreshAccessibilityTrust()
