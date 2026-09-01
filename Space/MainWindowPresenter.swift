@@ -13,7 +13,6 @@ final class MainWindowPresenter {
     private let windowDelegate = MainWindowDelegate()
     private var shouldShowWhenAvailable = false
     private var isSuppressingWindowPresentation = false
-    private var isAutoHideSuspended = false
     private let animationDuration: TimeInterval = 0.16
     private let windowSize = NSSize(width: 1080, height: 720)
 
@@ -24,12 +23,6 @@ final class MainWindowPresenter {
             name: NSApplication.didResignActiveNotification,
             object: nil
         )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(applicationDidBecomeActive),
-            name: NSApplication.didBecomeActiveNotification,
-            object: nil
-        )
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(workspaceDidActivateApplication(_:)),
@@ -38,32 +31,9 @@ final class MainWindowPresenter {
         )
     }
 
-    /// Keeps the window on screen across the next deactivation, for flows that hand focus
-    /// to another app on the user's behalf (opening System Settings, for example).
-    func suspendAutoHideUntilReactivated() {
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in
-                self?.suspendAutoHideUntilReactivated()
-            }
-            return
-        }
-
-        isAutoHideSuspended = true
-    }
-
     @objc private func applicationDidResignActive() {
-        guard !isSuppressingWindowPresentation, !isAutoHideSuspended else { return }
+        guard !isSuppressingWindowPresentation else { return }
         hideClipboardWindow()
-    }
-
-    @objc private func applicationDidBecomeActive() {
-        isAutoHideSuspended = false
-    }
-
-    /// The suspension lasts until the user comes back to the panel. Relying on
-    /// didBecomeActive alone would strand it, since this app no longer activates.
-    func handleWindowBecameKey() {
-        isAutoHideSuspended = false
     }
 
     func configure(services: AppServices) {
@@ -141,7 +111,7 @@ final class MainWindowPresenter {
     func handleWindowResignedKey() {
         DispatchQueue.main.async { [weak self] in
             guard let self, let window = self.window else { return }
-            guard !self.isSuppressingWindowPresentation, !self.isAutoHideSuspended else { return }
+            guard !self.isSuppressingWindowPresentation else { return }
 
             // Only the panel's own sheet, or an app-modal alert, may keep it on screen.
             // Testing NSApp.keyWindow for nil was too broad: clicking the menu bar item
@@ -161,7 +131,7 @@ final class MainWindowPresenter {
     @objc private func workspaceDidActivateApplication(_ notification: Notification) {
         let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         guard application?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
-        guard !isSuppressingWindowPresentation, !isAutoHideSuspended else { return }
+        guard !isSuppressingWindowPresentation else { return }
         hideClipboardWindow()
     }
 
@@ -329,8 +299,5 @@ private final class MainWindowDelegate: NSObject, NSWindowDelegate {
         MainWindowPresenter.shared.handleWindowResignedKey()
     }
 
-    func windowDidBecomeKey(_ notification: Notification) {
-        MainWindowPresenter.shared.handleWindowBecameKey()
-    }
 
 }

@@ -280,7 +280,6 @@ final class ScreenRecordingService: ObservableObject {
         guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
             return
         }
-        MainWindowPresenter.shared.suspendAutoHideUntilReactivated()
         NSWorkspace.shared.open(url)
     }
 

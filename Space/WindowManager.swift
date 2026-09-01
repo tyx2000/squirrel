@@ -54,7 +54,6 @@ final class WindowManager: ObservableObject {
     }
 
     func requestAccessibilityPermission() {
-        MainWindowPresenter.shared.suspendAutoHideUntilReactivated()
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
         refreshAccessibilityTrust()
