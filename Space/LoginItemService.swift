@@ -52,6 +52,7 @@ final class LoginItemService: ObservableObject {
         // can switch it back on.
         if enabled, SMAppService.mainApp.status == .requiresApproval {
             lastMessage = "Open at Login needs to be approved in System Settings > General > Login Items."
+            MainWindowPresenter.shared.hideClipboardWindow()
             SMAppService.openSystemSettingsLoginItems()
         }
     }

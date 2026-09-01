@@ -54,6 +54,11 @@ final class WindowManager: ObservableObject {
     }
 
     func requestAccessibilityPermission() {
+        // The panel floats above normal windows, so it would sit on top of the system's
+        // authorization prompt. Hide it up front rather than waiting for an activation
+        // notification the prompt may never post.
+        MainWindowPresenter.shared.hideClipboardWindow()
+
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
         refreshAccessibilityTrust()

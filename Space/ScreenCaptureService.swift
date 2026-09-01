@@ -110,6 +110,8 @@ final class ScreenCaptureService: ObservableObject {
         fail(message, onFailure: onFailure)
         guard !isShowingPermissionGuide else { return }
 
+        MainWindowPresenter.shared.hideClipboardWindow()
+
         isShowingPermissionGuide = true
         let alert = NSAlert()
         alert.messageText = "Screen Recording Access Required"
