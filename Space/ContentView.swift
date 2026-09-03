@@ -263,8 +263,10 @@ struct ContentView: View {
             clipboardStore.promoteItem(item)
         }
 
-        // The pick is done, so hand key status back to whatever the user was typing in.
+        // The pick is done, so hand key status back to whatever the user was typing in,
+        // then paste into it.
         MainWindowPresenter.shared.hideClipboardWindow()
+        PasteService.pasteIntoFrontmostApplication()
     }
 
     private func closeWindow() {
@@ -294,6 +296,7 @@ struct ContentView: View {
                         guard clipboardStore.copyToPasteboard(item) else { return }
                         clipboardStore.promoteItem(item)
                         MainWindowPresenter.shared.hideClipboardWindow()
+                        PasteService.pasteIntoFrontmostApplication()
                     },
                     onDelete: {
                         withAnimation(ClipboardLayout.resortAnimation) {
