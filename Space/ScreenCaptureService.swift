@@ -253,7 +253,8 @@ final class ScreenCaptureService: ObservableObject {
         guard width > 0, height > 0 else { return nil }
 
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        // Screenshots are opaque, and an alpha plane only makes the PNG bigger.
+        let bitmapInfo = CGImageAlphaInfo.noneSkipLast.rawValue
         guard let context = CGContext(
             data: nil,
             width: width,
@@ -297,20 +298,40 @@ final class ScreenCaptureService: ObservableObject {
         onFailure(message)
     }
 
-    private static func compositedImage(
+    static func compositedImage(
         baseImage: CGImage,
         annotations: [CaptureAnnotation],
         selectionRect: CGRect
     ) -> CGImage {
         guard !annotations.isEmpty else { return baseImage }
 
-        let imageSize = CGSize(width: baseImage.width, height: baseImage.height)
+        // Render at the crop's own pixel size. This used to go through NSImage(size:),
+        // which takes points, and lockFocus, which renders at the screen's backing scale:
+        // on a Retina display every annotated screenshot came out at twice the width and
+        // twice the height, four times the pixels, and PNGs of 30MB and more.
+        let width = baseImage.width
+        let height = baseImage.height
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: baseImage.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else {
+            return baseImage
+        }
+
+        let imageSize = CGSize(width: width, height: height)
+        context.draw(baseImage, in: CGRect(origin: .zero, size: imageSize))
+
         let scaleX = imageSize.width / max(selectionRect.width, 1)
         let scaleY = imageSize.height / max(selectionRect.height, 1)
-        let image = NSImage(size: imageSize)
-        image.lockFocus()
-        NSImage(cgImage: baseImage, size: imageSize).draw(in: CGRect(origin: .zero, size: imageSize))
 
+        // The annotation drawing is written against AppKit, so hand it this context.
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         NSColor.systemRed.setStroke()
         for annotation in annotations {
             draw(
@@ -320,10 +341,9 @@ final class ScreenCaptureService: ObservableObject {
                 scaleY: scaleY
             )
         }
+        NSGraphicsContext.restoreGraphicsState()
 
-        image.unlockFocus()
-        var proposedRect = CGRect(origin: .zero, size: imageSize)
-        return image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) ?? baseImage
+        return context.makeImage() ?? baseImage
     }
 
     private static func draw(

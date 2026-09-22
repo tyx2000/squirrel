@@ -524,6 +524,62 @@ struct SpaceTests {
         #expect(nearBottom == CaptureSampledColor(red: 0, green: 0, blue: 255))
     }
 
+    @Test func annotatedCaptureKeepsTheCropsPixelSize() async throws {
+        // A 1500 x 1000 pt selection cropped at 2x.
+        let base = try #require(Self.twoToneImage(
+            top: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
+            bottom: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
+            pixelSize: CGSize(width: 3000, height: 2000)
+        ))
+        let selection = CGRect(x: 0, y: 0, width: 1500, height: 1000)
+        let annotations = [
+            CaptureAnnotation(tool: .rectangle, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 600, y: 400))
+        ]
+
+        let result = ScreenCaptureService.compositedImage(
+            baseImage: base,
+            annotations: annotations,
+            selectionRect: selection
+        )
+
+        // On a Retina Mac this used to come back at 6000 x 4000.
+        #expect(result.width == 3000)
+        #expect(result.height == 2000)
+
+        // Screenshots are opaque, so no alpha plane.
+        let alphaInfo = result.alphaInfo
+        #expect(alphaInfo == .noneSkipLast || alphaInfo == .noneSkipFirst || alphaInfo == .none)
+
+        // The rectangle still lands where it was drawn: its left edge at x = 100 pt is
+        // x = 200 px, and a point halfway up it (y = 250 pt) is 500 px from the bottom,
+        // so 1500 px from the top of the CGImage.
+        let onStroke = try #require(Self.pixel(in: result, x: 200, y: 1500))
+        #expect(onStroke.red > 200 && onStroke.green < 120 && onStroke.blue < 120)
+        let inside = try #require(Self.pixel(in: result, x: 700, y: 1500))
+        #expect(inside.red > 240 && inside.green > 240 && inside.blue > 240)
+    }
+
+    private static func pixel(in image: CGImage, x: Int, y: Int) -> (red: Int, green: Int, blue: Int)? {
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let single = image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)) else {
+            return nil
+        }
+
+        var bytes = [UInt8](repeating: 0, count: 4)
+        return bytes.withUnsafeMutableBytes { buffer -> (Int, Int, Int)? in
+            guard let base = buffer.baseAddress,
+                  let context = CGContext(
+                    data: base, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                    space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                  ) else {
+                return nil
+            }
+            context.draw(single, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            let values = buffer.bindMemory(to: UInt8.self)
+            return (Int(values[0]), Int(values[1]), Int(values[2]))
+        }
+    }
+
     private static func twoToneImage(top: NSColor, bottom: NSColor, pixelSize: CGSize) -> CGImage? {
         let width = Int(pixelSize.width)
         let height = Int(pixelSize.height)
