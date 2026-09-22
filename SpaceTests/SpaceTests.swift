@@ -526,58 +526,184 @@ struct SpaceTests {
 
     @Test func annotatedCaptureKeepsTheCropsPixelSize() async throws {
         // A 1500 x 1000 pt selection cropped at 2x.
-        let base = try #require(Self.twoToneImage(
-            top: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
-            bottom: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1),
-            pixelSize: CGSize(width: 3000, height: 2000)
-        ))
+        let base = try #require(Self.solidImage(pixelSize: CGSize(width: 3000, height: 2000)))
         let selection = CGRect(x: 0, y: 0, width: 1500, height: 1000)
         let annotations = [
             CaptureAnnotation(tool: .rectangle, start: CGPoint(x: 100, y: 100), end: CGPoint(x: 600, y: 400))
         ]
 
-        let result = ScreenCaptureService.compositedImage(
-            baseImage: base,
+        let result = try #require(ScreenCaptureService.renderedCapture(
+            from: base,
             annotations: annotations,
             selectionRect: selection
-        )
+        ))
 
-        // On a Retina Mac this used to come back at 6000 x 4000.
         #expect(result.width == 3000)
         #expect(result.height == 2000)
+        #expect(Self.isOpaque(result))
 
-        // Screenshots are opaque, so no alpha plane.
-        let alphaInfo = result.alphaInfo
-        #expect(alphaInfo == .noneSkipLast || alphaInfo == .noneSkipFirst || alphaInfo == .none)
-
-        // The rectangle still lands where it was drawn: its left edge at x = 100 pt is
-        // x = 200 px, and a point halfway up it (y = 250 pt) is 500 px from the bottom,
-        // so 1500 px from the top of the CGImage.
-        let onStroke = try #require(Self.pixel(in: result, x: 200, y: 1500))
+        // The rectangle's left edge at x = 100 pt is x = 200 px; halfway up it is
+        // y = 250 pt, 500 px from the bottom.
+        let onStroke = try #require(Self.pixel(in: result, x: 200, yFromBottom: 500))
         #expect(onStroke.red > 200 && onStroke.green < 120 && onStroke.blue < 120)
-        let inside = try #require(Self.pixel(in: result, x: 700, y: 1500))
+        let inside = try #require(Self.pixel(in: result, x: 700, yFromBottom: 500))
         #expect(inside.red > 240 && inside.green > 240 && inside.blue > 240)
     }
 
-    private static func pixel(in image: CGImage, x: Int, y: Int) -> (red: Int, green: Int, blue: Int)? {
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let single = image.cropping(to: CGRect(x: x, y: y, width: 1, height: 1)) else {
+    /// The pixel-size check above holds on every host, but the bug it guards against only
+    /// reproduced where AppKit rendered at a 2x backing scale. On a 1x Mac this shows as
+    /// skipped rather than passing without having exercised that case.
+    @Test(.enabled("the Retina upscale regression needs a 2x screen to reproduce") {
+        await MainActor.run { (NSScreen.main?.backingScaleFactor ?? 1) > 1 }
+    })
+    func annotatedCaptureIgnoresTheRetinaBackingScale() async throws {
+        let base = try #require(Self.solidImage(pixelSize: CGSize(width: 600, height: 400)))
+        let result = try #require(ScreenCaptureService.renderedCapture(
+            from: base,
+            annotations: [CaptureAnnotation(tool: .line, start: .zero, end: CGPoint(x: 300, y: 200))],
+            selectionRect: CGRect(x: 0, y: 0, width: 300, height: 200)
+        ))
+
+        #expect(result.width == 600)
+        #expect(result.height == 400)
+    }
+
+    @Test func unannotatedCaptureIsAnOpaqueCopyAtTheSameSize() async throws {
+        let base = try #require(Self.solidImage(pixelSize: CGSize(width: 640, height: 480)))
+        let result = try #require(ScreenCaptureService.renderedCapture(
+            from: base,
+            annotations: [],
+            selectionRect: CGRect(x: 0, y: 0, width: 320, height: 240)
+        ))
+
+        #expect(result.width == 640)
+        #expect(result.height == 480)
+        #expect(Self.isOpaque(result))
+    }
+
+    @Test func captureKeepsADisplayP3ColorSpace() async throws {
+        let displayP3 = try #require(CGColorSpace(name: CGColorSpace.displayP3))
+        let base = try #require(Self.solidImage(pixelSize: CGSize(width: 64, height: 64), space: displayP3))
+
+        let result = try #require(ScreenCaptureService.renderedCapture(
+            from: base,
+            annotations: [],
+            selectionRect: CGRect(x: 0, y: 0, width: 32, height: 32)
+        ))
+
+        #expect(result.colorSpace?.name == CGColorSpace.displayP3)
+    }
+
+    @Test func extendedRangeCaptureFallsBackToSRGBAndKeepsAnnotations() async throws {
+        // An 8-bit context cannot hold an extended-range space, which is where the
+        // composite used to give up and return the image without its annotations.
+        let base = try #require(Self.extendedRangeImage(pixelSize: CGSize(width: 200, height: 200)))
+        let result = try #require(ScreenCaptureService.renderedCapture(
+            from: base,
+            annotations: [
+                CaptureAnnotation(tool: .rectangle, start: CGPoint(x: 20, y: 20), end: CGPoint(x: 80, y: 80))
+            ],
+            selectionRect: CGRect(x: 0, y: 0, width: 100, height: 100)
+        ))
+
+        #expect(result.colorSpace?.name == CGColorSpace.sRGB)
+        let onStroke = try #require(Self.pixel(in: result, x: 40, yFromBottom: 100))
+        #expect(onStroke.red > 200 && onStroke.green < 120 && onStroke.blue < 120)
+    }
+
+    @Test func oversizedCaptureIsScaledToFitThePixelCap() async throws {
+        // 400 x 300 is 120,000 px; a 30,000 px cap halves each side.
+        let base = try #require(Self.solidImage(pixelSize: CGSize(width: 400, height: 300)))
+        let result = try #require(ScreenCaptureService.renderedCapture(
+            from: base,
+            annotations: [
+                CaptureAnnotation(tool: .rectangle, start: CGPoint(x: 50, y: 30), end: CGPoint(x: 150, y: 120))
+            ],
+            selectionRect: CGRect(x: 0, y: 0, width: 200, height: 150),
+            maxPixelCount: 30_000
+        ))
+
+        #expect(result.width == 200)
+        #expect(result.height == 150)
+        #expect(result.width * result.height <= 30_000)
+
+        // The annotation shrinks with the image: its left edge at x = 50 pt was
+        // x = 100 px at full size and is x = 50 px now.
+        let onStroke = try #require(Self.pixel(in: result, x: 50, yFromBottom: 75))
+        #expect(onStroke.red > 200 && onStroke.green < 120 && onStroke.blue < 120)
+    }
+
+    @Test func fittedPixelSizeStaysWithinTheCapAndKeepsSmallImages() async throws {
+        let fitted = ScreenCaptureService.fittedPixelSize(
+            width: 6016,
+            height: 3384,
+            maxPixelCount: ClipboardHistoryStore.maxImagePixelCount
+        )
+        #expect(fitted.width * fitted.height <= ClipboardHistoryStore.maxImagePixelCount)
+        #expect(abs(Double(fitted.width) / Double(fitted.height) - 6016.0 / 3384.0) < 0.01)
+
+        let small = ScreenCaptureService.fittedPixelSize(width: 800, height: 600, maxPixelCount: 16_000_000)
+        #expect(small.width == 800 && small.height == 600)
+
+        let uncapped = ScreenCaptureService.fittedPixelSize(width: 6016, height: 3384, maxPixelCount: nil)
+        #expect(uncapped.width == 6016 && uncapped.height == 3384)
+    }
+
+    private static func isOpaque(_ image: CGImage) -> Bool {
+        [.none, .noneSkipLast, .noneSkipFirst].contains(image.alphaInfo)
+    }
+
+    /// Reads through the production sampler with one point per pixel, so coordinates
+    /// are bottom-left like the annotations themselves.
+    private static func pixel(in image: CGImage, x: Int, yFromBottom y: Int) -> CaptureSampledColor? {
+        CaptureColorSampler.color(
+            in: image,
+            atViewPoint: CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5),
+            snapshotPointSize: CGSize(width: image.width, height: image.height)
+        )
+    }
+
+    private static func solidImage(
+        pixelSize: CGSize,
+        space: CGColorSpace? = CGColorSpace(name: CGColorSpace.sRGB)
+    ) -> CGImage? {
+        guard let space,
+              let context = CGContext(
+                data: nil,
+                width: Int(pixelSize.width),
+                height: Int(pixelSize.height),
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: space,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+              ) else {
             return nil
         }
 
-        var bytes = [UInt8](repeating: 0, count: 4)
-        return bytes.withUnsafeMutableBytes { buffer -> (Int, Int, Int)? in
-            guard let base = buffer.baseAddress,
-                  let context = CGContext(
-                    data: base, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                    space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                  ) else {
-                return nil
-            }
-            context.draw(single, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-            let values = buffer.bindMemory(to: UInt8.self)
-            return (Int(values[0]), Int(values[1]), Int(values[2]))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(origin: .zero, size: pixelSize))
+        return context.makeImage()
+    }
+
+    private static func extendedRangeImage(pixelSize: CGSize) -> CGImage? {
+        guard let space = CGColorSpace(name: CGColorSpace.extendedSRGB),
+              let context = CGContext(
+                data: nil,
+                width: Int(pixelSize.width),
+                height: Int(pixelSize.height),
+                bitsPerComponent: 16,
+                bytesPerRow: 0,
+                space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                    | CGBitmapInfo.floatComponents.rawValue
+                    | CGBitmapInfo.byteOrder16Little.rawValue
+              ) else {
+            return nil
         }
+
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(origin: .zero, size: pixelSize))
+        return context.makeImage()
     }
 
     private static func twoToneImage(top: NSColor, bottom: NSColor, pixelSize: CGSize) -> CGImage? {

@@ -142,25 +142,23 @@ final class ScreenCaptureService: ObservableObject {
         annotations: [CaptureAnnotation],
         onFailure: @escaping (String) -> Void
     ) {
-        // Use the full-resolution image for pixel-perfect cropping, then release it.
         let cropSource = snapshot.fullResImage ?? snapshot.image
 
-        guard let image = Self.croppedImage(from: cropSource, snapshotPointSize: snapshot.pointSize, selectionRect: localSelectionRect) else {
+        // A copied screenshot goes to the pasteboard and to history, and history refuses
+        // anything over its pixel cap, so size it to fit rather than let the two disagree.
+        // A pin never enters history and keeps full resolution.
+        guard let region = Self.croppedRegion(
+            from: cropSource,
+            snapshotPointSize: snapshot.pointSize,
+            selectionRect: localSelectionRect
+        ), let outputImage = Self.renderedCapture(
+            from: region,
+            annotations: annotations,
+            selectionRect: localSelectionRect,
+            maxPixelCount: action == .pin ? nil : ClipboardHistoryStore.maxImagePixelCount
+        ) else {
             fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
             return
-        }
-
-        // croppedImage already returns a detached copy, so `image` is independent.
-        // compositedImage reads (doesn't mutate) its input, so no second detach needed.
-        let outputImage: CGImage
-        if annotations.isEmpty {
-            outputImage = image
-        } else {
-            outputImage = Self.compositedImage(
-                baseImage: image,
-                annotations: annotations,
-                selectionRect: localSelectionRect
-            )
         }
 
         if action == .pin {
@@ -236,39 +234,16 @@ final class ScreenCaptureService: ObservableObject {
         ).integral
     }
 
-    private static func croppedImage(from source: CGImage, snapshotPointSize: CGSize, selectionRect: CGRect) -> CGImage? {
+    /// The selected region of the snapshot. `cropping(to:)` shares the full-screen
+    /// snapshot's storage; renderedCapture copies it out so the snapshot can be freed.
+    private static func croppedRegion(from source: CGImage, snapshotPointSize: CGSize, selectionRect: CGRect) -> CGImage? {
         let cropRect = pixelCropRect(
             for: selectionRect,
             snapshotPointSize: snapshotPointSize,
             snapshotPixelSize: CGSize(width: source.width, height: source.height)
         )
         guard cropRect.width >= 1, cropRect.height >= 1 else { return nil }
-        guard let croppedImage = source.cropping(to: cropRect) else { return nil }
-        return detachedCopy(of: croppedImage)
-    }
-
-    private static func detachedCopy(of image: CGImage) -> CGImage? {
-        let width = image.width
-        let height = image.height
-        guard width > 0, height > 0 else { return nil }
-
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        // Screenshots are opaque, and an alpha plane only makes the PNG bigger.
-        let bitmapInfo = CGImageAlphaInfo.noneSkipLast.rawValue
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: colorSpace,
-            bitmapInfo: bitmapInfo
-        ) else {
-            return nil
-        }
-
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        return context.makeImage()
+        return source.cropping(to: cropRect)
     }
 
     private static func captureImage(in rect: CGRect) async throws -> CGImage {
@@ -298,52 +273,104 @@ final class ScreenCaptureService: ObservableObject {
         onFailure(message)
     }
 
-    static func compositedImage(
-        baseImage: CGImage,
+    /// Renders a captured region into an independent, opaque image, drawing any
+    /// annotations on top. This is the only copy of the pixels the capture makes.
+    ///
+    /// Everything is drawn in the region's own pixel coordinates. When `maxPixelCount`
+    /// is set and the region exceeds it, the context is scaled down so image and
+    /// annotations shrink together.
+    static func renderedCapture(
+        from region: CGImage,
         annotations: [CaptureAnnotation],
-        selectionRect: CGRect
-    ) -> CGImage {
-        guard !annotations.isEmpty else { return baseImage }
+        selectionRect: CGRect,
+        maxPixelCount: Int? = nil
+    ) -> CGImage? {
+        let sourceWidth = region.width
+        let sourceHeight = region.height
+        guard sourceWidth > 0, sourceHeight > 0 else { return nil }
 
-        // Render at the crop's own pixel size. This used to go through NSImage(size:),
-        // which takes points, and lockFocus, which renders at the screen's backing scale:
-        // on a Retina display every annotated screenshot came out at twice the width and
-        // twice the height, four times the pixels, and PNGs of 30MB and more.
-        let width = baseImage.width
-        let height = baseImage.height
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: baseImage.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        let outputSize = fittedPixelSize(width: sourceWidth, height: sourceHeight, maxPixelCount: maxPixelCount)
+        guard let context = makeOpaqueContext(
+            width: outputSize.width,
+            height: outputSize.height,
+            preferring: region.colorSpace
         ) else {
-            return baseImage
+            return nil
         }
 
-        let imageSize = CGSize(width: width, height: height)
-        context.draw(baseImage, in: CGRect(origin: .zero, size: imageSize))
-
-        let scaleX = imageSize.width / max(selectionRect.width, 1)
-        let scaleY = imageSize.height / max(selectionRect.height, 1)
-
-        // The annotation drawing is written against AppKit, so hand it this context.
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
-        NSColor.systemRed.setStroke()
-        for annotation in annotations {
-            draw(
-                annotation,
-                selectionRect: selectionRect,
-                scaleX: scaleX,
-                scaleY: scaleY
+        let sourceRect = CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)
+        if outputSize.width != sourceWidth || outputSize.height != sourceHeight {
+            context.interpolationQuality = .high
+            context.scaleBy(
+                x: CGFloat(outputSize.width) / CGFloat(sourceWidth),
+                y: CGFloat(outputSize.height) / CGFloat(sourceHeight)
             )
         }
-        NSGraphicsContext.restoreGraphicsState()
+        context.draw(region, in: sourceRect)
 
-        return context.makeImage() ?? baseImage
+        if !annotations.isEmpty {
+            let scaleX = CGFloat(sourceWidth) / max(selectionRect.width, 1)
+            let scaleY = CGFloat(sourceHeight) / max(selectionRect.height, 1)
+
+            // The annotation drawing is written against AppKit, so hand it this context.
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+            NSColor.systemRed.setStroke()
+            for annotation in annotations {
+                draw(
+                    annotation,
+                    selectionRect: selectionRect,
+                    scaleX: scaleX,
+                    scaleY: scaleY
+                )
+            }
+            NSGraphicsContext.restoreGraphicsState()
+        }
+
+        return context.makeImage()
+    }
+
+    /// The largest size with the same aspect ratio that fits within `maxPixelCount`.
+    static func fittedPixelSize(width: Int, height: Int, maxPixelCount: Int?) -> (width: Int, height: Int) {
+        guard let maxPixelCount, maxPixelCount > 0, width * height > maxPixelCount else {
+            return (width, height)
+        }
+
+        let scale = (Double(maxPixelCount) / Double(width * height)).squareRoot()
+        return (
+            max(1, Int((Double(width) * scale).rounded(.down))),
+            max(1, Int((Double(height) * scale).rounded(.down)))
+        )
+    }
+
+    /// An 8-bit, opaque context. Screenshots are opaque, so an alpha plane would only
+    /// make the PNG bigger. The capture's own colour space is kept when possible, so a
+    /// wide-gamut display stays Display P3 instead of being clipped to sRGB; an 8-bit
+    /// context cannot hold an extended-range space, and those fall back to sRGB rather
+    /// than failing and losing the annotations.
+    private static func makeOpaqueContext(width: Int, height: Int, preferring preferred: CGColorSpace?) -> CGContext? {
+        var candidates: [CGColorSpace] = []
+        if let preferred, preferred.model == .rgb {
+            candidates.append(preferred)
+        }
+        if let sRGB = CGColorSpace(name: CGColorSpace.sRGB) {
+            candidates.append(sRGB)
+        }
+
+        for space in candidates {
+            if let context = CGContext(
+                data: nil,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: space,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) {
+                return context
+            }
+        }
+        return nil
     }
 
     private static func draw(
