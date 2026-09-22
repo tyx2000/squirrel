@@ -146,7 +146,14 @@ final class ScreenCaptureService: ObservableObject {
 
         // A copied screenshot goes to the pasteboard and to history, and history refuses
         // anything over its pixel cap, so size it to fit rather than let the two disagree.
-        // A pin never enters history and keeps full resolution.
+        // A pin is never shown larger than its window, so it keeps no more than that.
+        let maxPixelCount = action == .pin
+            ? PinnedImageController.maxPixelCount(
+                forSelectionSize: localSelectionRect.size,
+                backingScale: screen.backingScaleFactor
+            )
+            : ClipboardHistoryStore.maxImagePixelCount
+
         guard let region = Self.croppedRegion(
             from: cropSource,
             snapshotPointSize: snapshot.pointSize,
@@ -155,7 +162,7 @@ final class ScreenCaptureService: ObservableObject {
             from: region,
             annotations: annotations,
             selectionRect: localSelectionRect,
-            maxPixelCount: action == .pin ? nil : ClipboardHistoryStore.maxImagePixelCount
+            maxPixelCount: maxPixelCount
         ) else {
             fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
             return

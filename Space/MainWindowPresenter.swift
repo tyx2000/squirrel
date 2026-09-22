@@ -44,17 +44,6 @@ final class MainWindowPresenter {
         }
     }
 
-    func toggleClipboardWindow() {
-        if !Thread.isMainThread {
-            DispatchQueue.main.async { [weak self] in
-                self?.toggleClipboardWindow()
-            }
-            return
-        }
-
-        showClipboardWindow()
-    }
-
     func showClipboardWindow() {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
@@ -298,6 +287,4 @@ private final class MainWindowDelegate: NSObject, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         MainWindowPresenter.shared.handleWindowResignedKey()
     }
-
-
 }

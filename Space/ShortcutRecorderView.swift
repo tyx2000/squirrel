@@ -26,10 +26,13 @@ struct ShortcutRecorderView: View {
             .monospaced()
             .background {
                 if isRecording {
-                    KeyCaptureView { combo in
-                        shortcut = combo
-                        finishRecording()
-                    }
+                    KeyCaptureView(
+                        onCapture: { combo in
+                            shortcut = combo
+                            finishRecording()
+                        },
+                        onCancel: { cancelRecording() }
+                    )
                     .frame(width: 1, height: 1)
                 }
             }
@@ -45,6 +48,10 @@ struct ShortcutRecorderView: View {
 
     private func startRecording() {
         guard !isRecording else { return }
+        // Hotkey suspension is shared, so a second recorder finishing would re-register
+        // every hotkey while this one still waits for keys. End any other recorder first;
+        // this one is not recording yet, so it ignores the notification itself.
+        NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
         hotKeyManager.suspendHotKeys()
         isRecording = true
     }
@@ -82,10 +89,13 @@ struct CompactShortcutRecorderView: View {
             .monospaced()
             .background {
                 if isRecording {
-                    KeyCaptureView { combo in
-                        shortcut = combo
-                        finishRecording()
-                    }
+                    KeyCaptureView(
+                        onCapture: { combo in
+                            shortcut = combo
+                            finishRecording()
+                        },
+                        onCancel: { cancelRecording() }
+                    )
                     .frame(width: 1, height: 1)
                 }
             }
@@ -101,6 +111,10 @@ struct CompactShortcutRecorderView: View {
 
     private func startRecording() {
         guard !isRecording else { return }
+        // Hotkey suspension is shared, so a second recorder finishing would re-register
+        // every hotkey while this one still waits for keys. End any other recorder first;
+        // this one is not recording yet, so it ignores the notification itself.
+        NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
         hotKeyManager.suspendHotKeys()
         isRecording = true
     }
@@ -120,23 +134,29 @@ struct CompactShortcutRecorderView: View {
 
 private struct KeyCaptureView: NSViewRepresentable {
     let onCapture: (HotKeyCombo) -> Void
+    let onCancel: () -> Void
 
     func makeNSView(context: Context) -> CaptureView {
-        CaptureView(onCapture: onCapture)
+        CaptureView(onCapture: onCapture, onCancel: onCancel)
     }
 
     func updateNSView(_ nsView: CaptureView, context: Context) {
         nsView.onCapture = onCapture
+        nsView.onCancel = onCancel
         DispatchQueue.main.async {
             nsView.window?.makeFirstResponder(nsView)
         }
     }
 
     final class CaptureView: NSView {
-        var onCapture: (HotKeyCombo) -> Void
+        private static let escapeKeyCode: UInt16 = 53
 
-        init(onCapture: @escaping (HotKeyCombo) -> Void) {
+        var onCapture: (HotKeyCombo) -> Void
+        var onCancel: () -> Void
+
+        init(onCapture: @escaping (HotKeyCombo) -> Void, onCancel: @escaping () -> Void) {
             self.onCapture = onCapture
+            self.onCancel = onCancel
             super.init(frame: .zero)
         }
 
@@ -152,6 +172,14 @@ private struct KeyCaptureView: NSViewRepresentable {
         }
 
         override func keyDown(with event: NSEvent) {
+            // This view takes every key while recording, so Escape never reaches the
+            // window. A bare Escape backs out and leaves the existing shortcut alone.
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+            if event.keyCode == Self.escapeKeyCode, modifiers.isEmpty {
+                onCancel()
+                return
+            }
+
             guard let combo = HotKeyCombo(event: event) else {
                 NSSound.beep()
                 return

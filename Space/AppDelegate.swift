@@ -18,8 +18,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
-        openClipboardWindow()
+        // After the first run the app starts quietly in the menu bar, which matters now
+        // that it can open at login: otherwise the panel would appear at every login.
+        if Self.isFirstLaunch() {
+            openClipboardWindow()
+        }
         services?.loginItemService.promptIfNeeded()
+    }
+
+    private static let hasLaunchedKey = "Space.hasPresentedAtFirstLaunch"
+
+    /// True the first time only, and records that it has been answered.
+    static func isFirstLaunch(recordingIn defaults: UserDefaults = .standard) -> Bool {
+        guard !defaults.bool(forKey: hasLaunchedKey) else { return false }
+        defaults.set(true, forKey: hasLaunchedKey)
+        return true
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -110,9 +110,16 @@ struct HotKeyCombo: Codable, Hashable {
         if event.modifierFlags.contains(.option) { carbonModifiers |= UInt32(optionKey) }
         if event.modifierFlags.contains(.control) { carbonModifiers |= UInt32(controlKey) }
 
-        guard carbonModifiers != 0 else { return nil }
-        self.keyCode = UInt32(event.keyCode)
-        self.modifiers = carbonModifiers
+        let combo = HotKeyCombo(keyCode: UInt32(event.keyCode), modifiers: carbonModifiers)
+        guard combo.isSafeGlobalShortcut else { return nil }
+        self = combo
+    }
+
+    /// A global hotkey takes its combination away from every app on the system, so it
+    /// needs Command, Control, or Option. Shift alone would swallow ordinary typing:
+    /// Shift-A would stop producing a capital A anywhere.
+    var isSafeGlobalShortcut: Bool {
+        modifiers & UInt32(cmdKey | controlKey | optionKey) != 0
     }
 
     var displayString: String {

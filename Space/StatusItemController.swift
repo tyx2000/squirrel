@@ -18,12 +18,47 @@ final class StatusItemController {
         item.button?.toolTip = "Open Space"
         item.button?.setAccessibilityLabel("Open Space")
         item.button?.target = self
-        item.button?.action = #selector(openMainWindow)
+        item.button?.action = #selector(handleClick)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
+    }
+
+    /// A click opens the panel. A right-click or Control-click offers a menu, which is
+    /// the only way to quit without opening the panel: an accessory app has no Dock icon
+    /// to right-click and no main menu for Command-Q to act on.
+    @objc private func handleClick() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            showMenu()
+        } else {
+            openMainWindow()
+        }
+    }
+
+    private func showMenu() {
+        guard let button = statusItem?.button else { return }
+
+        let menu = NSMenu()
+        let openItem = NSMenuItem(title: "Open Space", action: #selector(openMainWindow), keyEquivalent: "")
+        openItem.target = self
+        menu.addItem(openItem)
+        menu.addItem(.separator())
+        let quitItem = NSMenuItem(title: "Quit Space", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
+        // Just below the button, whichever way its coordinates run.
+        let gap: CGFloat = 5
+        let location = NSPoint(x: 0, y: button.isFlipped ? button.bounds.maxY + gap : button.bounds.minY - gap)
+        menu.popUp(positioning: nil, at: location, in: button)
     }
 
     @objc private func openMainWindow() {
         NotificationCenter.default.post(name: .openClipboardWindow, object: nil)
+    }
+
+    @objc private func quit() {
+        NSApp.terminate(nil)
     }
 
     /// A Star of Bethlehem: four main rays, four shorter diagonal rays, and an

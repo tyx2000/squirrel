@@ -20,7 +20,7 @@ final class PinnedImageController {
             didEvict = true
         }
 
-        let windowSize = displaySize(for: selectionRect.size)
+        let windowSize = Self.displaySize(for: selectionRect.size)
         let frame = CGRect(
             x: screen.frame.minX + selectionRect.minX,
             y: screen.frame.minY + selectionRect.minY,
@@ -37,10 +37,18 @@ final class PinnedImageController {
         return (didEvict, windows.count)
     }
 
-    private func displaySize(for pointSize: CGSize) -> CGSize {
+    static func displaySize(for pointSize: CGSize) -> CGSize {
         let maxSize = CGSize(width: 720, height: 520)
         let scale = min(1, maxSize.width / max(pointSize.width, 1), maxSize.height / max(pointSize.height, 1))
         return CGSize(width: max(pointSize.width * scale, 80), height: max(pointSize.height * scale, 60))
+    }
+
+    /// The most pixels a pin can show: its on-screen size at the screen's backing scale.
+    /// Pins cannot be resized, so keeping more only holds memory while the pin stays up.
+    static func maxPixelCount(forSelectionSize pointSize: CGSize, backingScale: CGFloat) -> Int {
+        let display = displaySize(for: pointSize)
+        let scale = max(backingScale, 1)
+        return Int((display.width * scale).rounded(.up)) * Int((display.height * scale).rounded(.up))
     }
 }
 

@@ -41,11 +41,40 @@ final class HotKeyManager: ObservableObject {
     }
 
     func updateShortcut(_ combo: HotKeyCombo, for command: HotKeyCommand) {
-        shortcuts[command] = combo
+        let previous = shortcut(for: command)
+        let result = Self.assigning(combo, to: command, in: shortcuts)
+        shortcuts = result.shortcuts
+        if let displaced = result.displaced {
+            lastEventMessage = "\(combo.displayString) was used by \(displaced.title), which now uses \(previous.displayString)."
+        }
+
         saveShortcuts()
         if !isSuspended {
             registerAll()
         }
+    }
+
+    /// Assigns `combo` to `command`. A combination another command already holds would
+    /// make its second registration fail and silently disable one of the two, so they
+    /// swap: the other command takes over `command`'s previous combination.
+    static func assigning(
+        _ combo: HotKeyCombo,
+        to command: HotKeyCommand,
+        in shortcuts: [HotKeyCommand: HotKeyCombo]
+    ) -> (shortcuts: [HotKeyCommand: HotKeyCombo], displaced: HotKeyCommand?) {
+        func current(_ command: HotKeyCommand) -> HotKeyCombo? {
+            shortcuts[command] ?? HotKeyCombo.defaultShortcuts[command]
+        }
+
+        var updated = shortcuts
+        var displaced: HotKeyCommand?
+        if let conflicting = HotKeyCommand.allCases.first(where: { $0 != command && current($0) == combo }),
+           let previous = current(command) {
+            updated[conflicting] = previous
+            displaced = conflicting
+        }
+        updated[command] = combo
+        return (updated, displaced)
     }
 
     func shortcut(for command: HotKeyCommand) -> HotKeyCombo {
@@ -96,7 +125,7 @@ final class HotKeyManager: ObservableObject {
 
     private func registerAll() {
         unregisterAll()
-        registrationError = nil
+        var failures: [String] = []
 
         for command in HotKeyCommand.allCases {
             let combo = shortcut(for: command)
@@ -114,9 +143,13 @@ final class HotKeyManager: ObservableObject {
             if status == noErr, let ref {
                 refs[command] = ref
             } else {
-                registrationError = "\(command.title) shortcut registration failed (\(status)). It may conflict with the system or another app."
+                failures.append("\(command.title) (\(status))")
             }
         }
+
+        registrationError = failures.isEmpty
+            ? nil
+            : "Shortcut registration failed for \(failures.joined(separator: ", ")). It may conflict with the system or another app."
     }
 
     private func unregisterAll() {
@@ -191,6 +224,10 @@ final class HotKeyManager: ObservableObject {
         }
 
         var shortcuts = decoded.merging(HotKeyCombo.defaultShortcuts) { current, _ in current }
+
+        for (command, combo) in shortcuts where !combo.isSafeGlobalShortcut {
+            shortcuts[command] = HotKeyCombo.defaultShortcuts[command]
+        }
 
         if shortcuts[.clipboardWindow] == HotKeyCombo.legacyClipboardWindowShortcut {
             shortcuts[.clipboardWindow] = HotKeyCombo.defaultShortcuts[.clipboardWindow]

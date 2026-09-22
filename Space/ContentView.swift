@@ -120,6 +120,10 @@ struct ContentView: View {
                 selectedTab = .history
             }
             selectedItemID = clipboardStore.items.first?.id
+
+            // Both can change in System Settings while the panel is hidden.
+            windowManager.refreshPermissionStatus()
+            loginItemService.refresh()
         }
         .onReceive(NotificationCenter.default.publisher(for: .historyNavigation)) { notification in
             guard selectedTab == .history,
@@ -253,10 +257,16 @@ struct ContentView: View {
 
     private func copySelectedItem(in items: [ClipboardItem]) {
         guard let selectedItemID,
-              let item = items.first(where: { $0.id == selectedItemID }),
-              clipboardStore.copyToPasteboard(item) else {
+              let item = items.first(where: { $0.id == selectedItemID }) else {
             return
         }
+        pick(item)
+    }
+
+    /// Copies an entry, moves it to the top, and pastes it into the field the panel was
+    /// opened over. Return and the card's copy button both end here.
+    private func pick(_ item: ClipboardItem) {
+        guard clipboardStore.copyToPasteboard(item) else { return }
 
         // Promotion moves the item to the top; selection follows it by id.
         withAnimation(ClipboardLayout.resortAnimation) {
@@ -293,10 +303,7 @@ struct ContentView: View {
                     imageDataProvider: { clipboardStore.imageData(for: item) },
                     onCopy: {
                         selectedItemID = item.id
-                        guard clipboardStore.copyToPasteboard(item) else { return }
-                        clipboardStore.promoteItem(item)
-                        MainWindowPresenter.shared.hideClipboardWindow()
-                        PasteService.pasteIntoFrontmostApplication()
+                        pick(item)
                     },
                     onDelete: {
                         withAnimation(ClipboardLayout.resortAnimation) {

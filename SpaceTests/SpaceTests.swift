@@ -524,6 +524,170 @@ struct SpaceTests {
         #expect(nearBottom == CaptureSampledColor(red: 0, green: 0, blue: 255))
     }
 
+    @Test func concealedPasteboardContentIsNotRecorded() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)
+
+        // What a password manager puts on the pasteboard.
+        let concealed = ClipboardHistoryStore.privateContentTypes[0]
+        pasteboard.declareTypes([.string, concealed], owner: nil)
+        pasteboard.setString("hunter2", forType: .string)
+        pasteboard.setData(Data(), forType: concealed)
+        store.pollPasteboard()
+        #expect(store.items.isEmpty)
+
+        // The next ordinary copy is still recorded.
+        pasteboard.clearContents()
+        pasteboard.setString("hello", forType: .string)
+        store.pollPasteboard()
+        #expect(store.items.map(\.text) == ["hello"])
+    }
+
+    @Test func copiedFilesAreRecordedAsPathsNotIconImages() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)
+
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("space-test-\(UUID().uuidString).txt")
+        try "contents".write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        // Like a Finder copy: the file URL plus an image of its icon.
+        let icon = try #require(NSWorkspace.shared.icon(forFile: fileURL.path).tiffRepresentation)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([fileURL as NSURL])
+        pasteboard.addTypes([.tiff], owner: nil)
+        pasteboard.setData(icon, forType: .tiff)
+        store.pollPasteboard()
+
+        let item = try #require(store.items.first)
+        #expect(store.items.count == 1)
+        #expect(item.isImage == false)
+        #expect(URL(fileURLWithPath: item.text).resolvingSymlinksInPath() == fileURL.resolvingSymlinksInPath())
+    }
+
+    @Test func unreadableHistoryEntryKeepsTheRestAndTheOriginalFile() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storageURL = directory.appendingPathComponent("clipboard-history.json")
+
+        let valid = ClipboardItem(text: "keep me", createdAt: Date())
+        let validObject = try JSONSerialization.jsonObject(with: JSONEncoder().encode(valid))
+        let original = try JSONSerialization.data(withJSONObject: [validObject, ["unexpected": true]])
+        try original.write(to: storageURL)
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: storageURL)
+
+        #expect(store.items.map(\.text) == ["keep me"])
+        #expect(store.lastError != nil)
+        let backup = try #require(Self.unreadableBackup(in: directory))
+        #expect(try Data(contentsOf: backup) == original)
+    }
+
+    @Test func corruptHistoryFileIsKeptBeforeAnythingOverwritesIt() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storageURL = directory.appendingPathComponent("clipboard-history.json")
+        let original = Data("not json".utf8)
+        try original.write(to: storageURL)
+
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: storageURL)
+        #expect(store.items.isEmpty)
+
+        // The next copy saves over the history file; the copy made at load survives.
+        store.addText("new entry")
+        let backup = try #require(Self.unreadableBackup(in: directory))
+        #expect(try Data(contentsOf: backup) == original)
+    }
+
+    @Test func shiftAloneIsNotAcceptedAsAGlobalShortcut() async throws {
+        let shiftOnly = try #require(Self.keyEvent(keyCode: kVK_ANSI_A, flags: [.shift]))
+        #expect(HotKeyCombo(event: shiftOnly) == nil)
+
+        let controlShift = try #require(Self.keyEvent(keyCode: kVK_ANSI_A, flags: [.control, .shift]))
+        let combo = try #require(HotKeyCombo(event: controlShift))
+        #expect(combo.modifiers == UInt32(controlKey | shiftKey))
+    }
+
+    @Test func savedShiftOnlyShortcutFallsBackToTheDefault() async throws {
+        let unsafe = HotKeyCombo(keyCode: UInt32(kVK_ANSI_A), modifiers: UInt32(shiftKey))
+        let saved = try JSONEncoder().encode([HotKeyCommand.clipboardWindow: unsafe])
+
+        let shortcuts = HotKeyManager.shortcutsByMergingDefaults(from: saved)
+        #expect(shortcuts[.clipboardWindow] == HotKeyCombo.defaultShortcuts[.clipboardWindow])
+    }
+
+    @Test func assigningATakenShortcutSwapsInsteadOfDisablingACommand() async throws {
+        let defaults = HotKeyCombo.defaultShortcuts
+        let captureCombo = try #require(defaults[.captureArea])
+
+        let result = HotKeyManager.assigning(captureCombo, to: .lockScreen, in: defaults)
+
+        #expect(result.displaced == .captureArea)
+        #expect(result.shortcuts[.lockScreen] == captureCombo)
+        #expect(result.shortcuts[.captureArea] == defaults[.lockScreen])
+        let assigned = HotKeyCommand.allCases.compactMap { result.shortcuts[$0] }
+        #expect(Set(assigned).count == HotKeyCommand.allCases.count)
+
+        let unused = HotKeyCombo(keyCode: UInt32(kVK_ANSI_K), modifiers: UInt32(controlKey | optionKey | cmdKey))
+        #expect(HotKeyManager.assigning(unused, to: .lockScreen, in: defaults).displaced == nil)
+    }
+
+    @Test func panelIsPresentedAtLaunchOnlyTheFirstTime() async throws {
+        let suiteName = "SpaceTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(AppDelegate.isFirstLaunch(recordingIn: defaults))
+        #expect(!AppDelegate.isFirstLaunch(recordingIn: defaults))
+    }
+
+    @Test func pinsKeepOnlyThePixelsTheirWindowCanShow() async throws {
+        // A 1280 x 720 pt selection pins at 720 x 405 pt, which is 1440 x 810 px at 2x.
+        let wide = PinnedImageController.maxPixelCount(
+            forSelectionSize: CGSize(width: 1280, height: 720),
+            backingScale: 2
+        )
+        #expect(wide == 1440 * 810)
+
+        // A selection smaller than the pin limit keeps its own full resolution.
+        let small = PinnedImageController.maxPixelCount(
+            forSelectionSize: CGSize(width: 200, height: 100),
+            backingScale: 2
+        )
+        #expect(small >= 400 * 200)
+    }
+
+    private static func unreadableBackup(in directory: URL) -> URL? {
+        (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))?
+            .first { $0.lastPathComponent.hasPrefix("clipboard-history.unreadable-") }
+    }
+
+    private static func keyEvent(keyCode: Int, flags: NSEvent.ModifierFlags) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: flags,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            isARepeat: false,
+            keyCode: UInt16(keyCode)
+        )
+    }
+
     @Test func annotatedCaptureKeepsTheCropsPixelSize() async throws {
         // A 1500 x 1000 pt selection cropped at 2x.
         let base = try #require(Self.solidImage(pixelSize: CGSize(width: 3000, height: 2000)))
