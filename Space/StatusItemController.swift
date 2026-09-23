@@ -13,7 +13,7 @@ final class StatusItemController {
         // variableLength sizes the slot to the glyph; squareLength pins it to the full
         // menu bar height, which leaves the glyph stranded in a wide empty button.
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = Self.piImage()
+        item.button?.image = Self.emojiImage("\u{1F303}")
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "Open Space"
         item.button?.setAccessibilityLabel("Open Space")
@@ -61,56 +61,38 @@ final class StatusItemController {
         NSApp.terminate(nil)
     }
 
-    /// The mathematical constant's symbol, drawn from the system font's glyph outline
-    /// as a template image so the menu bar tints it for light, dark, and highlighted
-    /// states.
-    private static func piImage(size: CGFloat = 22, inset: CGFloat = 2) -> NSImage {
-        let font = NSFont.systemFont(ofSize: size, weight: .medium)
+    /// The menu bar glyph. Emoji carry their own colour, so this is not a template
+    /// image: as a template the menu bar would keep only the alpha channel and flatten
+    /// it into a solid silhouette.
+    private static func emojiImage(_ emoji: String, size: CGFloat = 22, inset: CGFloat = 3) -> NSImage {
+        let font = NSFont(name: "Apple Color Emoji", size: size) ?? .systemFont(ofSize: size)
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: emoji, attributes: [.font: font])
+        )
 
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }
 
-            guard let path = glyphPath(for: "\u{03C0}", font: font) else {
-                // Without the outline, lay the character out instead of drawing nothing.
-                let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
-                let text = "\u{03C0}" as NSString
-                let textSize = text.size(withAttributes: attributes)
-                text.draw(
-                    at: NSPoint(x: (size - textSize.width) / 2, y: (size - textSize.height) / 2),
-                    withAttributes: attributes
-                )
-                return true
-            }
+            // Centre on the glyph's drawn bounds rather than its typographic ones, which
+            // include the line's ascent and descent and would sit it low in the box.
+            let ink = CTLineGetImageBounds(line, context)
+            guard ink.width > 0, ink.height > 0 else { return false }
 
-            // Scale the glyph's outline into the box. Filling the box entirely left it
-            // noticeably heavier than its neighbours, whose ink measures 14 to 16.5pt.
-            let bounds = path.boundingBoxOfPath
             let available = size - inset * 2
-            let scale = min(available / bounds.width, available / bounds.height)
-
+            let scale = min(available / ink.width, available / ink.height)
             context.saveGState()
             context.translateBy(
-                x: (size - bounds.width * scale) / 2 - bounds.minX * scale,
-                y: (size - bounds.height * scale) / 2 - bounds.minY * scale
+                x: (size - ink.width * scale) / 2 - ink.minX * scale,
+                y: (size - ink.height * scale) / 2 - ink.minY * scale
             )
             context.scaleBy(x: scale, y: scale)
-            context.addPath(path)
-            context.setFillColor(NSColor.black.cgColor)
-            context.fillPath()
+            context.textPosition = .zero
+            CTLineDraw(line, context)
             context.restoreGState()
             return true
         }
 
-        image.isTemplate = true
+        image.isTemplate = false
         return image
-    }
-
-    private static func glyphPath(for character: String, font: NSFont) -> CGPath? {
-        var unichar = Array(character.utf16)
-        guard unichar.count == 1 else { return nil }
-
-        var glyph: CGGlyph = 0
-        guard CTFontGetGlyphsForCharacters(font as CTFont, &unichar, &glyph, 1) else { return nil }
-        return CTFontCreatePathForGlyph(font as CTFont, glyph, nil)
     }
 }
