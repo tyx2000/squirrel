@@ -121,12 +121,6 @@ struct SpaceTests {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    @Test func vacuumRefusesToSelectAWholeUserDataCategory() async throws {
-        #expect(VacuumItemKind.applicationSupport.isUserData)
-        #expect(VacuumItemKind.simulator.isUserData)
-        #expect(VacuumItemKind.cache.isUserData == false)
-    }
-
     @Test func clipboardHistoryRejectsImageDataWhenDiskStorageUnavailable() async throws {
         // storageURL: nil → no disk backing → image storage must fail gracefully.
         let store = ClipboardHistoryStore(storageURL: nil)
@@ -380,81 +374,6 @@ struct SpaceTests {
         #expect(Set(HotKeyCombo.defaultShortcuts.keys) == Set(HotKeyCommand.allCases))
         #expect(Set(HotKeyCommand.allCases.map(\.carbonID)).count == HotKeyCommand.allCases.count)
         #expect(HotKeyCommand.standaloneCommands.contains(.fullscreen))
-    }
-
-    @Test func vacuumRemovesCategoryAfterAllChildrenAreCleaned() async throws {
-        let child = VacuumScanItem(
-            id: "/tmp/cache-a",
-            title: "cache-a",
-            path: "/tmp/cache-a",
-            kind: .cache,
-            sizeBytes: 100,
-            isSelected: true,
-            isExpanded: false,
-            children: []
-        )
-        let category = VacuumScanItem(
-            id: "category:Caches",
-            title: "Caches",
-            path: nil,
-            kind: .cache,
-            sizeBytes: child.sizeBytes,
-            isSelected: true,
-            isExpanded: true,
-            children: [child]
-        )
-
-        let remaining = DiskVacuumService.removingCleanedItems(
-            ids: [child.id],
-            paths: [child.path!],
-            from: [category]
-        )
-
-        #expect(remaining.isEmpty)
-    }
-
-    @Test func vacuumRecalculatesPartiallyCleanedCategory() async throws {
-        let removedChild = VacuumScanItem(
-            id: "/tmp/cache-a",
-            title: "cache-a",
-            path: "/tmp/cache-a",
-            kind: .cache,
-            sizeBytes: 100,
-            isSelected: true,
-            isExpanded: false,
-            children: []
-        )
-        let remainingChild = VacuumScanItem(
-            id: "/tmp/cache-b",
-            title: "cache-b",
-            path: "/tmp/cache-b",
-            kind: .cache,
-            sizeBytes: 40,
-            isSelected: false,
-            isExpanded: false,
-            children: []
-        )
-        let category = VacuumScanItem(
-            id: "category:Caches",
-            title: "Caches",
-            path: nil,
-            kind: .cache,
-            sizeBytes: 140,
-            isSelected: false,
-            isExpanded: true,
-            children: [removedChild, remainingChild]
-        )
-
-        let remaining = DiskVacuumService.removingCleanedItems(
-            ids: [removedChild.id],
-            paths: [removedChild.path!],
-            from: [category]
-        )
-        let updatedCategory = try #require(remaining.first)
-
-        #expect(updatedCategory.children == [remainingChild])
-        #expect(updatedCategory.sizeBytes == remainingChild.sizeBytes)
-        #expect(updatedCategory.isSelected == false)
     }
 
     @Test func capturePixelCoordinateFlipsViewPointAndAppliesBackingScale() async throws {

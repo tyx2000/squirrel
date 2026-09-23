@@ -175,7 +175,6 @@ final class MainWindowPresenter {
             .environmentObject(services.windowManager)
             .environmentObject(services.screenCaptureService)
             .environmentObject(services.screenRecordingService)
-            .environmentObject(services.diskVacuumService)
             .environmentObject(services.loginItemService)
             .frame(width: windowSize.width, height: windowSize.height)
             .ignoresSafeArea()

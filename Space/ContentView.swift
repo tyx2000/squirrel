@@ -35,7 +35,6 @@ private enum AppTypography {
 
 private enum MainTab: String, CaseIterable, Identifiable {
     case history
-    case vacuum
     case shortcuts
 
     var id: String { rawValue }
@@ -43,7 +42,6 @@ private enum MainTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .history: "Clipboard"
-        case .vacuum: "Vacuum"
         case .shortcuts: "Shortcuts"
         }
     }
@@ -51,7 +49,6 @@ private enum MainTab: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .history: "doc.on.clipboard"
-        case .vacuum: "gauge.with.dots.needle.bottom.100percent"
         case .shortcuts: "keyboard"
         }
     }
@@ -76,7 +73,6 @@ struct ContentView: View {
     @EnvironmentObject private var windowManager: WindowManager
     @EnvironmentObject private var screenCaptureService: ScreenCaptureService
     @EnvironmentObject private var screenRecordingService: ScreenRecordingService
-    @EnvironmentObject private var diskVacuumService: DiskVacuumService
     @EnvironmentObject private var loginItemService: LoginItemService
 
     @State private var selectedTab: MainTab = .history
@@ -315,8 +311,6 @@ struct ContentView: View {
                     selectedItemID = item.id
                 }
             }
-        case .vacuum:
-            VacuumView()
         case .shortcuts:
             shortcutsView
         }
@@ -514,231 +508,6 @@ private struct ShortcutRecorderGroupView: View {
                     title: command.title,
                     shortcut: shortcut(command)
                 )
-            }
-        }
-    }
-}
-
-private struct VacuumView: View {
-    @EnvironmentObject private var diskVacuumService: DiskVacuumService
-    @State private var isConfirmingClean = false
-
-    private var userDataWarning: String {
-        let titles = diskVacuumService.selectedUserDataTitles
-        let listed = titles.prefix(3).joined(separator: ", ")
-        let remainder = titles.count - min(titles.count, 3)
-        let suffix = remainder > 0 ? " (+\(remainder) more)" : ""
-        return "\(titles.count) selected item(s) hold app or user data, not caches: \(listed)\(suffix). They will be moved to Trash."
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 18) {
-                    VacuumMetricView(
-                        title: "Reclaimable",
-                        value: DiskVacuumService.formatBytes(diskVacuumService.totalScannedBytes)
-                    )
-                    VacuumMetricView(
-                        title: "Selected",
-                        value: DiskVacuumService.formatBytes(diskVacuumService.selectedBytes)
-                    )
-
-                    Spacer(minLength: 12)
-
-                    Button {
-                        diskVacuumService.scan()
-                    } label: {
-                        Label(diskVacuumService.isScanning ? "Scanning" : "Scan", systemImage: "magnifyingglass")
-                    }
-                    .disabled(diskVacuumService.isScanning || diskVacuumService.isCleaning)
-
-                    if diskVacuumService.isScanning {
-                        Button {
-                            diskVacuumService.cancelScan()
-                        } label: {
-                            Label("Stop", systemImage: "xmark")
-                        }
-                    }
-
-                    Button {
-                        if diskVacuumService.selectedUserDataTitles.isEmpty {
-                            diskVacuumService.cleanSelected()
-                        } else {
-                            isConfirmingClean = true
-                        }
-                    } label: {
-                        Label("Clean", systemImage: "trash")
-                    }
-                    .disabled(diskVacuumService.selectedBytes == 0 || diskVacuumService.isScanning || diskVacuumService.isCleaning)
-                    .alert("Move selected items to Trash?", isPresented: $isConfirmingClean) {
-                        Button("Cancel", role: .cancel) {}
-                        Button("Move to Trash", role: .destructive) {
-                            diskVacuumService.cleanSelected()
-                        }
-                    } message: {
-                        Text(userDataWarning)
-                    }
-                }
-
-                if let currentPath = diskVacuumService.currentPath {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text(currentPath)
-                            .font(AppTypography.secondary)
-                            .foregroundStyle(AppPalette.secondaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-
-                if let message = diskVacuumService.lastMessage {
-                    HStack(spacing: 10) {
-                        Label(message, systemImage: "info.circle")
-                            .foregroundStyle(AppPalette.secondaryText)
-                        Spacer()
-                        Button("Dismiss") {
-                            diskVacuumService.clearMessage()
-                        }
-                    }
-                    .font(AppTypography.secondary)
-                }
-            }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 16)
-            .background(AppPalette.topBarBackground)
-
-            Rectangle()
-                .fill(AppPalette.separator)
-                .frame(height: 1)
-
-            if diskVacuumService.items.isEmpty, !diskVacuumService.isScanning {
-                emptyVacuumState
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(diskVacuumService.items) { item in
-                            VacuumItemRow(item: item, level: 0)
-                        }
-                    }
-                    .padding(14)
-                }
-            }
-        }
-    }
-
-    private var emptyVacuumState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "externaldrive.badge.magnifyingglass")
-                .font(.system(size: 40))
-                .foregroundStyle(AppPalette.secondaryText)
-            Text("No Scan Results")
-                .font(AppTypography.title)
-            Text("Run a scan to list cleanup candidates.")
-                .font(AppTypography.body)
-                .foregroundStyle(AppPalette.secondaryText)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-private struct VacuumMetricView: View {
-    let title: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(AppTypography.secondary)
-                .foregroundStyle(AppPalette.secondaryText)
-            Text(value)
-                .font(AppTypography.metric.monospacedDigit())
-                .lineLimit(1)
-        }
-        .frame(minWidth: 104, alignment: .leading)
-    }
-}
-
-private struct VacuumItemRow: View {
-    @EnvironmentObject private var diskVacuumService: DiskVacuumService
-
-    let item: VacuumScanItem
-    let level: Int
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                if item.hasChildren {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.16)) {
-                            diskVacuumService.setExpanded(!item.isExpanded, for: item.id)
-                        }
-                    } label: {
-                        Image(systemName: item.isExpanded ? "chevron.down" : "chevron.right")
-                            .font(AppTypography.icon)
-                            .frame(width: 28, height: 28)
-                    }
-                    .buttonStyle(.plain)
-                } else {
-                    Color.clear
-                        .frame(width: 28, height: 28)
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.title)
-                        .font(item.hasChildren ? AppTypography.bodySemibold : AppTypography.body)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    if let path = item.path {
-                        Text(path)
-                            .font(AppTypography.secondary)
-                            .foregroundStyle(AppPalette.secondaryText)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    } else {
-                        Text(item.kind.rawValue)
-                            .font(AppTypography.secondary)
-                            .foregroundStyle(AppPalette.secondaryText)
-                    }
-                }
-
-                Spacer(minLength: 12)
-
-                Text(DiskVacuumService.formatBytes(item.sizeBytes))
-                    .font(AppTypography.body.monospacedDigit())
-                    .foregroundStyle(AppPalette.secondaryText)
-                    .frame(width: 84, alignment: .trailing)
-
-                if item.hasChildren, item.kind.isUserData, !item.isSelected {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(AppTypography.icon)
-                        .foregroundStyle(.orange)
-                        .help("Holds app or user data — select entries individually.")
-                } else {
-                    Toggle("", isOn: Binding(
-                        get: { item.isSelected },
-                        set: { diskVacuumService.setSelected($0, for: item.id) }
-                    ))
-                    .toggleStyle(.checkbox)
-                    .labelsHidden()
-                }
-            }
-            .padding(.leading, CGFloat(level) * 28)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 48)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(level == 0 ? AppPalette.cardBackground : Color.clear)
-            )
-
-            if item.isExpanded {
-                VStack(spacing: 4) {
-                    ForEach(item.children) { child in
-                        VacuumItemRow(item: child, level: level + 1)
-                    }
-                }
-                .padding(.top, 4)
             }
         }
     }

@@ -11,9 +11,9 @@ final class StatusItemController {
         guard statusItem == nil else { return }
 
         // variableLength sizes the slot to the glyph; squareLength pins it to the full
-        // menu bar height, which leaves the star stranded in a wide empty button.
+        // menu bar height, which leaves the glyph stranded in a wide empty button.
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = Self.starImage()
+        item.button?.image = Self.piImage()
         item.button?.imagePosition = .imageOnly
         item.button?.toolTip = "Open Space"
         item.button?.setAccessibilityLabel("Open Space")
@@ -61,71 +61,56 @@ final class StatusItemController {
         NSApp.terminate(nil)
     }
 
-    /// A Star of Bethlehem: four main rays, four shorter diagonal rays, and an
-    /// elongated lower ray. Drawn as a template image so the menu bar tints it for
-    /// light, dark, and highlighted states.
-    /// 22pt rather than the usual 18: measured against neighbouring menu bar icons,
-    /// whose ink runs 14-16.5pt tall, an 18pt box left this glyph at 13pt.
-    private static func starImage(size: CGFloat = 22) -> NSImage {
-        // Ray lengths as a fraction of the radius, chosen by rasterising candidates at
-        // the 2x size the menu bar actually uses.
-        let cardinalLength: CGFloat = 0.78
-        let diagonalLength: CGFloat = 0.52
-        let tailLength: CGFloat = 1.0
-        let waistLength: CGFloat = 0.28
-        let rayCount = 8
-        let degreesPerRay = 360.0 / Double(rayCount)
-
-        // Unit-space outline: a tip for each ray, a waist point between neighbours.
-        var unitPoints: [CGPoint] = []
-        for index in 0..<rayCount {
-            let degrees = 90 - Double(index) * degreesPerRay
-            let normalized = ((Int(degrees.rounded()) % 360) + 360) % 360
-            let length: CGFloat
-            if normalized == 270 {
-                length = tailLength
-            } else if normalized % 90 == 0 {
-                length = cardinalLength
-            } else {
-                length = diagonalLength
-            }
-
-            for (angle, radius) in [(degrees, length), (degrees - degreesPerRay / 2, waistLength)] {
-                let radians = angle * .pi / 180
-                unitPoints.append(CGPoint(x: radius * cos(radians), y: radius * sin(radians)))
-            }
-        }
+    /// The mathematical constant's symbol, drawn from the system font's glyph outline
+    /// as a template image so the menu bar tints it for light, dark, and highlighted
+    /// states.
+    private static func piImage(size: CGFloat = 22, inset: CGFloat = 2) -> NSImage {
+        let font = NSFont.systemFont(ofSize: size, weight: .medium)
 
         let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
-            // Scale the star's own bounding box to fill the image. Without this the
-            // shorter rays leave the glyph looking small inside its button.
-            let minX = unitPoints.map(\.x).min() ?? -1
-            let maxX = unitPoints.map(\.x).max() ?? 1
-            let minY = unitPoints.map(\.y).min() ?? -1
-            let maxY = unitPoints.map(\.y).max() ?? 1
-            let width = max(maxX - minX, 0.001)
-            let height = max(maxY - minY, 0.001)
-            let scale = min(size / width, size / height)
-            let offsetX = -minX * scale + (size - width * scale) / 2
-            let offsetY = -minY * scale + (size - height * scale) / 2
+            guard let context = NSGraphicsContext.current?.cgContext else { return false }
 
-            let path = NSBezierPath()
-            for (index, point) in unitPoints.enumerated() {
-                let mapped = CGPoint(x: point.x * scale + offsetX, y: point.y * scale + offsetY)
-                if index == 0 {
-                    path.move(to: mapped)
-                } else {
-                    path.line(to: mapped)
-                }
+            guard let path = glyphPath(for: "\u{03C0}", font: font) else {
+                // Without the outline, lay the character out instead of drawing nothing.
+                let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+                let text = "\u{03C0}" as NSString
+                let textSize = text.size(withAttributes: attributes)
+                text.draw(
+                    at: NSPoint(x: (size - textSize.width) / 2, y: (size - textSize.height) / 2),
+                    withAttributes: attributes
+                )
+                return true
             }
-            path.close()
 
-            NSColor.black.setFill()
-            path.fill()
+            // Scale the glyph's outline into the box. Filling the box entirely left it
+            // noticeably heavier than its neighbours, whose ink measures 14 to 16.5pt.
+            let bounds = path.boundingBoxOfPath
+            let available = size - inset * 2
+            let scale = min(available / bounds.width, available / bounds.height)
+
+            context.saveGState()
+            context.translateBy(
+                x: (size - bounds.width * scale) / 2 - bounds.minX * scale,
+                y: (size - bounds.height * scale) / 2 - bounds.minY * scale
+            )
+            context.scaleBy(x: scale, y: scale)
+            context.addPath(path)
+            context.setFillColor(NSColor.black.cgColor)
+            context.fillPath()
+            context.restoreGState()
             return true
         }
 
         image.isTemplate = true
         return image
+    }
+
+    private static func glyphPath(for character: String, font: NSFont) -> CGPath? {
+        var unichar = Array(character.utf16)
+        guard unichar.count == 1 else { return nil }
+
+        var glyph: CGGlyph = 0
+        guard CTFontGetGlyphsForCharacters(font as CTFont, &unichar, &glyph, 1) else { return nil }
+        return CTFontCreatePathForGlyph(font as CTFont, glyph, nil)
     }
 }
