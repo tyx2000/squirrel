@@ -9,7 +9,9 @@
 import AppKit
 import Carbon
 import Foundation
+import ImageIO
 import Testing
+import UniformTypeIdentifiers
 @testable import Space
 
 @MainActor
@@ -605,6 +607,180 @@ struct SpaceTests {
             isARepeat: false,
             keyCode: UInt16(keyCode)
         )
+    }
+
+    @Test func vectorPasteboardImageIsMeasuredByTheSizeItRendersAt() async throws {
+        // A 200 x 200 inch page reports no pixels at all; it would render at 14400 x 14400.
+        let poster = try #require(NSImage(data: Self.pdfData(side: 200 * 72)))
+        #expect(ClipboardHistoryStore.imagePixelCount(for: poster) > ClipboardHistoryStore.maxImagePixelCount)
+
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(
+            pasteboard: pasteboard,
+            storageURL: directory.appendingPathComponent("clipboard-history.json")
+        )
+
+        // Refused before anything is rasterised.
+        pasteboard.declareTypes([.pdf], owner: nil)
+        pasteboard.setData(Self.pdfData(side: 200 * 72), forType: .pdf)
+        store.pollPasteboard()
+        #expect(store.items.isEmpty)
+        #expect(store.lastError?.contains("16MP") == true)
+
+        // An ordinary page still comes through.
+        pasteboard.clearContents()
+        pasteboard.declareTypes([.pdf], owner: nil)
+        pasteboard.setData(Self.pdfData(side: 400), forType: .pdf)
+        store.pollPasteboard()
+        #expect(store.items.count == 1)
+    }
+
+    @Test func pasteboardImagesPreferCompactRepresentations() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(
+            pasteboard: pasteboard,
+            storageURL: directory.appendingPathComponent("clipboard-history.json")
+        )
+
+        // What a photo app offers: an uncompressed TIFF and a JPEG of the same image.
+        let image = try #require(Self.solidImage(pixelSize: CGSize(width: 320, height: 240)))
+        let jpegType = NSPasteboard.PasteboardType(UTType.jpeg.identifier)
+        pasteboard.declareTypes([.tiff, jpegType], owner: nil)
+        pasteboard.setData(try #require(Self.encoded(image, as: .tiff)), forType: .tiff)
+        pasteboard.setData(try #require(Self.encoded(image, as: .jpeg)), forType: jpegType)
+        store.pollPasteboard()
+
+        let stored = try #require(store.items.first.flatMap(store.imageData(for:)))
+        #expect(Self.typeIdentifier(of: stored) == UTType.jpeg.identifier)
+    }
+
+    @Test func tiffEntriesAreCompactedToPNGAndStillRecognised() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(
+            pasteboard: pasteboard,
+            storageURL: directory.appendingPathComponent("clipboard-history.json")
+        )
+
+        let image = try #require(Self.solidImage(pixelSize: CGSize(width: 320, height: 240)))
+        let tiff = try #require(Self.encoded(image, as: .tiff))
+        #expect(store.addImageData(tiff))
+        let originalFileName = try #require(store.items.first?.imageFileName)
+        let fingerprint = store.items.first?.imageFingerprint
+
+        var compacted: ClipboardItem?
+        for _ in 0..<50 {
+            if let item = store.items.first, item.imageFileName != originalFileName {
+                compacted = item
+                break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        let item = try #require(compacted)
+        let stored = try #require(store.imageData(for: item))
+        #expect(Self.typeIdentifier(of: stored) == UTType.png.identifier)
+        #expect(item.imageFingerprint == fingerprint)
+        #expect(!FileManager.default.fileExists(
+            atPath: directory.appendingPathComponent("ClipboardImages").appendingPathComponent(originalFileName).path
+        ))
+
+        // The same TIFF copied again is still a duplicate, not a second entry.
+        #expect(store.addImageData(tiff))
+        #expect(store.items.filter(\.isImage).count == 1)
+    }
+
+    @Test func copyingAJPEGEntryBackStillOffersTIFF() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(
+            pasteboard: pasteboard,
+            storageURL: directory.appendingPathComponent("clipboard-history.json")
+        )
+
+        let image = try #require(Self.solidImage(pixelSize: CGSize(width: 320, height: 240)))
+        #expect(store.addImageData(try #require(Self.encoded(image, as: .jpeg))))
+        let item = try #require(store.items.first)
+        #expect(store.copyToPasteboard(item))
+
+        // Declared as what it is, with the system's TIFF translation for older readers.
+        #expect(pasteboard.types?.contains(NSPasteboard.PasteboardType(UTType.jpeg.identifier)) == true)
+        #expect(pasteboard.data(forType: .tiff) != nil)
+    }
+
+    @Test func overlayWithNoMatchingScreenCancelsInsteadOfHanging() async throws {
+        let image = try #require(Self.solidImage(pixelSize: CGSize(width: 64, height: 64)))
+        let unknownDisplay: CGDirectDisplayID = 0xFFFF_FFF0
+        var cancellations = 0
+        let controller = CaptureOverlayController(
+            snapshotsByDisplayID: [
+                unknownDisplay: CaptureScreenSnapshot(
+                    displayID: unknownDisplay,
+                    image: image,
+                    fullResImage: image,
+                    pointSize: CGSize(width: 32, height: 32)
+                )
+            ],
+            onComplete: { _, _, _, _, _ in },
+            onCancel: { cancellations += 1 }
+        )
+
+        #expect(controller.begin() == false)
+        #expect(cancellations == 1)
+    }
+
+    @Test func thumbnailsDecodeOnlyWhatThePreviewShows() async throws {
+        // A tall screenshot is limited by the 230pt height: 460px at 2x.
+        #expect(ClipboardThumbnail.maxPixelSize(forImagePixelSize: CGSize(width: 1000, height: 3000), backingScale: 2) == 460)
+        // A wide one by the 940pt width.
+        #expect(ClipboardThumbnail.maxPixelSize(forImagePixelSize: CGSize(width: 6000, height: 1000), backingScale: 2) == 1880)
+        // A small image is never upscaled.
+        #expect(ClipboardThumbnail.maxPixelSize(forImagePixelSize: CGSize(width: 200, height: 100), backingScale: 2) == 200)
+    }
+
+    private static func temporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private static func pdfData(side: CGFloat) -> Data {
+        let data = NSMutableData()
+        var box = CGRect(x: 0, y: 0, width: side, height: side)
+        guard let consumer = CGDataConsumer(data: data),
+              let context = CGContext(consumer: consumer, mediaBox: &box, nil) else {
+            return Data()
+        }
+        context.beginPDFPage(nil)
+        context.setFillColor(CGColor(gray: 0.5, alpha: 1))
+        context.fill(box)
+        context.endPDFPage()
+        context.closePDF()
+        return data as Data
+    }
+
+    private static func encoded(_ image: CGImage, as type: UTType) -> Data? {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
+    }
+
+    private static func typeIdentifier(of data: Data) -> String? {
+        CGImageSourceCreateWithData(data as CFData, nil).flatMap { CGImageSourceGetType($0) as String? }
     }
 
     @Test func annotatedCaptureKeepsTheCropsPixelSize() async throws {

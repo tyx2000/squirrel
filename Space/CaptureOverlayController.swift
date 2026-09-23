@@ -236,7 +236,13 @@ final class CaptureOverlayController {
         self.onCancel = onCancel
     }
 
-    func begin() {
+    /// Shows an overlay on each screen that has a snapshot. Returns false, having already
+    /// cancelled, when there is none: usually a display was disconnected or rearranged
+    /// while the snapshot was taken. With no window, nothing could ever finish or cancel,
+    /// and the capture would hold presentation suppression forever, blocking both later
+    /// captures and the clipboard panel.
+    @discardableResult
+    func begin() -> Bool {
         let mouseLocation = NSEvent.mouseLocation
         windows = NSScreen.screens.compactMap { screen in
             guard let displayID = screen.displayID,
@@ -265,9 +271,15 @@ final class CaptureOverlayController {
             window.displayIfNeeded()
             return window
         }
+        guard !windows.isEmpty else {
+            cancel()
+            return false
+        }
+
         let keyWindow = windows.first { $0.frame.contains(mouseLocation) } ?? windows.first
         keyWindow?.makeKeyAndOrderFront(nil)
         keyWindow?.makeFirstResponder(keyWindow?.contentView)
+        return true
     }
 
     private func finish(

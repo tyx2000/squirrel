@@ -33,7 +33,13 @@ final class WindowManager: ObservableObject {
     private var layoutAnimationGeneration = 0
     private static let fullScreenAttribute = "AXFullScreen" as CFString
 
+    /// Every Accessibility call here runs on the main thread. The system default lets a
+    /// call to an unresponsive app wait about six seconds, and one layout command makes
+    /// around 25 calls, so a hung app used to freeze Space for minutes.
+    private static let accessibilityMessagingTimeout: Float = 0.5
+
     init() {
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Self.accessibilityMessagingTimeout)
         captureCurrentTarget()
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
@@ -239,10 +245,16 @@ final class WindowManager: ObservableObject {
 
     private func focusedWindow(in appElement: AXUIElement) -> AXUIElement? {
         var focused: CFTypeRef?
-        if AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focused) == .success,
+        let focusedStatus = AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focused)
+        if focusedStatus == .success,
            let focused,
            CFGetTypeID(focused) == AXUIElementGetTypeID() {
             return (focused as! AXUIElement)
+        }
+
+        // The app did not answer in time; asking twice more would only wait twice more.
+        if focusedStatus == .cannotComplete {
+            return nil
         }
 
         var main: CFTypeRef?
@@ -323,6 +335,11 @@ final class WindowManager: ObservableObject {
         let firstFrame = interpolate(from: startFrame, to: targetFrame, progress: easeOutCubic(firstProgress))
         let firstResult = set(window: window, frame: firstFrame)
 
+        // An app that did not answer the first step will not answer the other eight.
+        guard firstResult.sizeStatus != .cannotComplete, firstResult.positionStatus != .cannotComplete else {
+            return firstResult
+        }
+
         for step in 2...layoutAnimationSteps {
             let progress = Double(step) / Double(layoutAnimationSteps)
             let frame = interpolate(from: startFrame, to: targetFrame, progress: easeOutCubic(progress))
@@ -349,6 +366,11 @@ final class WindowManager: ObservableObject {
         let firstProgress = 1.0 / Double(layoutAnimationSteps)
         let firstOrigin = interpolate(from: startFrame.origin, to: targetOrigin, progress: easeOutCubic(firstProgress))
         let firstResult = set(window: window, position: firstOrigin)
+
+        // An app that did not answer the first step will not answer the other eight.
+        guard firstResult.positionStatus != .cannotComplete else {
+            return firstResult
+        }
 
         for step in 2...layoutAnimationSteps {
             let progress = Double(step) / Double(layoutAnimationSteps)

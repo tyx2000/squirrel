@@ -647,17 +647,16 @@ private struct ClipboardImagePreview: View {
             return
         }
 
+        let backingScale = NSScreen.main?.backingScaleFactor ?? 2
         let thumbnail = await Task.detached(priority: .userInitiated) {
-            Self.downsampledImage(url: imageURL, data: imageData)
+            Self.downsampledImage(url: imageURL, data: imageData, backingScale: backingScale)
         }.value
 
         guard !Task.isCancelled else { return }
         image = thumbnail
     }
 
-    private static let thumbnailMaxPixelSize = 1800
-
-    private static func downsampledImage(url: URL?, data: Data?) -> NSImage? {
+    private static func downsampledImage(url: URL?, data: Data?, backingScale: CGFloat) -> NSImage? {
         autoreleasepool {
             let source: CGImageSource?
             if let url {
@@ -674,7 +673,10 @@ private struct ClipboardImagePreview: View {
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceShouldCacheImmediately: true,
-                kCGImageSourceThumbnailMaxPixelSize: thumbnailMaxPixelSize
+                kCGImageSourceThumbnailMaxPixelSize: ClipboardThumbnail.maxPixelSize(
+                    forImagePixelSize: ClipboardThumbnail.orientedPixelSize(of: source),
+                    backingScale: backingScale
+                )
             ]
 
             guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
@@ -686,6 +688,43 @@ private struct ClipboardImagePreview: View {
                 size: NSSize(width: thumbnail.width, height: thumbnail.height)
             )
         }
+    }
+}
+
+/// Decode only as many pixels as a clipboard preview can show. A fixed 1800px cap on
+/// the long side decoded a tall screenshot at about fifteen times the pixels its 230pt
+/// frame displays.
+enum ClipboardThumbnail {
+    /// The largest area a preview occupies: the card's content width beside its action
+    /// buttons, and the preview's 230pt height cap.
+    static let displayBox = CGSize(width: 940, height: 230)
+
+    /// The long side to decode at so the image fits `displayBox` at `backingScale`,
+    /// never upscaling an image that is already smaller.
+    static func maxPixelSize(forImagePixelSize imageSize: CGSize, backingScale: CGFloat) -> Int {
+        let scale = max(backingScale, 1)
+        let box = CGSize(width: displayBox.width * scale, height: displayBox.height * scale)
+        guard imageSize.width > 0, imageSize.height > 0 else {
+            return Int(max(box.width, box.height))
+        }
+
+        let fit = min(1, box.width / imageSize.width, box.height / imageSize.height)
+        return max(1, Int((max(imageSize.width, imageSize.height) * fit).rounded()))
+    }
+
+    /// Pixel size after EXIF orientation, which the thumbnail applies.
+    static func orientedPixelSize(of source: CGImageSource) -> CGSize {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
+            return .zero
+        }
+
+        let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.doubleValue ?? 0
+        let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.doubleValue ?? 0
+        let orientation = (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 1
+        // Orientations 5 to 8 rotate by 90 degrees.
+        return (5...8).contains(orientation)
+            ? CGSize(width: height, height: width)
+            : CGSize(width: width, height: height)
     }
 }
 

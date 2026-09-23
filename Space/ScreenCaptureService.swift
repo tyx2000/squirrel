@@ -98,7 +98,11 @@ final class ScreenCaptureService: ObservableObject {
             }
         )
         overlayController = controller
-        controller.begin()
+        guard controller.begin() else {
+            // begin() has already cancelled, which cleared the capture state.
+            fail("Capture Area could not show its overlay: the screen changed while it was being captured.", onFailure: onFailure)
+            return
+        }
     }
 
     private func hasScreenCaptureAccess() -> Bool {

@@ -6,6 +6,7 @@ import CryptoKit
 import Foundation
 import ImageIO
 import os.log
+import UniformTypeIdentifiers
 
 @MainActor
 final class ClipboardHistoryStore: ObservableObject {
@@ -49,7 +50,9 @@ final class ClipboardHistoryStore: ObservableObject {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let store = self else { return }
-            Task { @MainActor in
+            // The timer is on the main run loop, so poll in place rather than scheduling
+            // a task on every tick for the life of the app.
+            MainActor.assumeIsolated {
                 store.pollPasteboard()
             }
         }
@@ -186,7 +189,72 @@ final class ClipboardHistoryStore: ObservableObject {
         )
         pruneHistory(now: date)
         save()
+        compactStoredImageIfNeeded(itemID: id, fileName: fileName, imageData: imageData)
         return true
+    }
+
+    /// TIFF usually arrives uncompressed, about 48MB for a 12MP photo, and was stored
+    /// byte for byte. Rewrite it as PNG off the main thread once the entry is listed.
+    /// The fingerprint stays that of the data as it arrived, so copying the same image
+    /// again is still recognised as a duplicate.
+    private func compactStoredImageIfNeeded(itemID: UUID, fileName: String, imageData: Data) {
+        guard let imageDirectoryURL,
+              Self.imageTypeIdentifier(for: imageData) == UTType.tiff.identifier else {
+            return
+        }
+
+        let sourceURL = imageDirectoryURL.appendingPathComponent(fileName)
+        let compactFileName = "\(itemID.uuidString).png"
+        let compactURL = imageDirectoryURL.appendingPathComponent(compactFileName)
+
+        Task.detached(priority: .utility) { [weak self] in
+            guard let pngData = Self.pngData(fromImageAt: sourceURL),
+                  (try? pngData.write(to: compactURL, options: .atomic)) != nil else {
+                return
+            }
+
+            await self?.finishCompaction(
+                itemID: itemID,
+                originalFileName: fileName,
+                compactFileName: compactFileName
+            )
+        }
+    }
+
+    private func finishCompaction(itemID: UUID, originalFileName: String, compactFileName: String) {
+        guard let imageDirectoryURL else { return }
+        let compactURL = imageDirectoryURL.appendingPathComponent(compactFileName)
+
+        // Deleted, pruned, or deduplicated while the PNG was being written.
+        guard let index = items.firstIndex(where: { $0.id == itemID && $0.imageFileName == originalFileName }) else {
+            try? FileManager.default.removeItem(at: compactURL)
+            return
+        }
+
+        items[index].imageFileName = compactFileName
+        save()
+        try? FileManager.default.removeItem(at: imageDirectoryURL.appendingPathComponent(originalFileName))
+    }
+
+    nonisolated private static func pngData(fromImageAt url: URL) -> Data? {
+        autoreleasepool {
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                return nil
+            }
+
+            let data = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(
+                data,
+                UTType.png.identifier as CFString,
+                1,
+                nil
+            ) else {
+                return nil
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            return CGImageDestinationFinalize(destination) ? data as Data : nil
+        }
     }
 
     func delete(_ item: ClipboardItem) {
@@ -460,17 +528,33 @@ final class ClipboardHistoryStore: ObservableObject {
         try? FileManager.default.removeItem(at: imageDirectoryURL.appendingPathComponent(imageFileName))
     }
 
+    /// Image representations to take from the pasteboard, most compact first. TIFF,
+    /// which apps usually provide uncompressed (about 96MB for a 24MP photo), comes last.
+    /// macOS only ever translates other image types to TIFF, never the other way, so
+    /// asking for these in order never forces a lossy conversion.
+    static let imagePasteboardTypes: [NSPasteboard.PasteboardType] = [
+        .png,
+        NSPasteboard.PasteboardType(UTType.jpeg.identifier),
+        NSPasteboard.PasteboardType(UTType.heic.identifier),
+        .tiff
+    ]
+
+    /// The first image representation the pasteboard holds, without rasterising.
+    private func encodedImageDataOnPasteboard() -> Data? {
+        for type in Self.imagePasteboardTypes {
+            if let data = pasteboard.data(forType: type), !data.isEmpty {
+                return data
+            }
+        }
+        return nil
+    }
+
     private func imageDataFromPasteboard() -> Data? {
-        // Try PNG and TIFF representations first — addImageData validates pixel limits.
-        if let pngData = pasteboard.data(forType: .png), !pngData.isEmpty {
-            return pngData
+        if let data = encodedImageDataOnPasteboard() {
+            return data
         }
 
-        if let tiffData = pasteboard.data(forType: .tiff), !tiffData.isEmpty {
-            return tiffData
-        }
-
-        // Fallback: read NSImage from pasteboard and convert to TIFF.
+        // Fallback: anything else NSImage can read, such as a PDF, rendered to TIFF.
         guard let image = pasteboard.readObjects(forClasses: [NSImage.self])?.first as? NSImage else {
             return nil
         }
@@ -485,16 +569,25 @@ final class ClipboardHistoryStore: ObservableObject {
         }
     }
 
+    /// The pixels `tiffRepresentation` would produce. Vector representations (PDF, EPS)
+    /// report no pixel size at all, so they are measured by the point size they render
+    /// at: counting them as one pixel let a 200-inch PDF page through to a 791MB bitmap.
     static func imagePixelCount(for image: NSImage) -> Int {
-        let representationPixelCount = image.representations
-            .map { max($0.pixelsWide, 1) * max($0.pixelsHigh, 1) }
-            .max()
-
-        if let representationPixelCount {
-            return representationPixelCount
+        let renderedCount = pixelCount(width: image.size.width, height: image.size.height)
+        let representationCounts = image.representations.map { representation -> Int in
+            guard representation.pixelsWide > 0, representation.pixelsHigh > 0 else {
+                return renderedCount
+            }
+            return pixelCount(width: CGFloat(representation.pixelsWide), height: CGFloat(representation.pixelsHigh))
         }
+        return representationCounts.max() ?? renderedCount
+    }
 
-        return max(Int(image.size.width), 1) * max(Int(image.size.height), 1)
+    /// Width times height, saturating instead of trapping on huge or non-finite sizes.
+    private static func pixelCount(width: CGFloat, height: CGFloat) -> Int {
+        guard width.isFinite, height.isFinite else { return Int.max }
+        let product = Double(max(width, 1)) * Double(max(height, 1))
+        return product >= Double(Int.max) ? Int.max : Int(product)
     }
 
     private static func imagePixelCount(forImageData imageData: Data) -> Int? {
@@ -520,13 +613,15 @@ final class ClipboardHistoryStore: ObservableObject {
             .joined()
     }
 
+    /// Declares what the stored data really is (PNG, JPEG, HEIC or TIFF). For anything
+    /// but TIFF the system also offers a TIFF translation to apps that only read TIFF.
     private static func pasteboardType(forImageData imageData: Data) -> NSPasteboard.PasteboardType {
-        let pngSignature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
-        if imageData.prefix(pngSignature.count).elementsEqual(pngSignature) {
-            return .png
-        }
+        imageTypeIdentifier(for: imageData).map { NSPasteboard.PasteboardType($0) } ?? .tiff
+    }
 
-        return .tiff
+    private static func imageTypeIdentifier(for imageData: Data) -> String? {
+        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil) else { return nil }
+        return CGImageSourceGetType(source) as String?
     }
 
     private func currentSourceApplicationName() -> String? {
@@ -543,8 +638,17 @@ final class ClipboardHistoryStore: ObservableObject {
     }
 
     private func itemMatchesPasteboard(_ item: ClipboardItem) -> Bool {
-        if item.isImage, let itemImageData = imageData(for: item) {
-            return imageDataFromPasteboard() == itemImageData
+        if item.isImage {
+            // Never the rasterising fallback: that could render a vector image at
+            // hundreds of megabytes just to answer this.
+            guard let pasteboardData = encodedImageDataOnPasteboard() else { return false }
+
+            // The fingerprint is of the data as it arrived, which still matches after a
+            // TIFF entry has been compacted to PNG on disk.
+            if let fingerprint = item.imageFingerprint, Self.imageFingerprint(for: pasteboardData) == fingerprint {
+                return true
+            }
+            return imageData(for: item) == pasteboardData
         }
 
         return pasteboard.string(forType: .string) == item.text
