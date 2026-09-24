@@ -847,12 +847,18 @@ struct SpaceTests {
         #expect(StatusItemController.elapsedText(-5) == "00:00")
     }
 
-    @Test func recordingIndicatorKeepsItsSizeWhileBlinking() async throws {
-        // The dot's space is kept when it blinks off, so the menu bar item never shifts.
-        let on = StatusItemController.recordingIndicatorImage(elapsedText: "00:07", dotVisible: true)
-        let off = StatusItemController.recordingIndicatorImage(elapsedText: "00:07", dotVisible: false)
-        #expect(on.size == off.size)
-        #expect(on.isTemplate == false)
+    @Test func recordingIndicatorIsARedPillWithTheTime() async throws {
+        let image = StatusItemController.recordingIndicatorImage(elapsedText: "00:07")
+        #expect(image.isTemplate == false)
+
+        // Just inside the pill's left end, clear of the text, is its red fill.
+        let rep = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+        let color = try #require(rep.colorAt(x: Int(3 * CGFloat(rep.pixelsWide) / image.size.width), y: rep.pixelsHigh / 2)?
+            .usingColorSpace(.sRGB))
+        #expect(color.redComponent > 0.8 && color.greenComponent < 0.4 && color.blueComponent < 0.4)
+
+        // Transparent outside the pill.
+        #expect((rep.colorAt(x: 0, y: 0)?.alphaComponent ?? 1) == 0)
     }
 
     @Test func annotatedCaptureKeepsTheCropsPixelSize() async throws {

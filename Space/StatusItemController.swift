@@ -11,7 +11,6 @@ final class StatusItemController {
     private var statusItem: NSStatusItem?
     private var recordingObservation: AnyCancellable?
     private var recordingTimer: Timer?
-    private var isRecordingDotVisible = true
     private let normalImage = StatusItemController.emojiImage("\u{1F303}")
 
     init(screenRecordingService: ScreenRecordingService) {
@@ -51,19 +50,17 @@ final class StatusItemController {
     }
 
     /// The system's own recording indicator is small and cannot be changed, so while
-    /// recording this item becomes a blue pill with a blinking red dot and the elapsed
-    /// time, and a click on it stops the recording.
+    /// recording this item becomes a red pill showing the elapsed time, and a click on
+    /// it stops the recording.
     private func showRecordingState() {
-        isRecordingDotVisible = true
         updateRecordingIndicator()
         statusItem?.button?.toolTip = "Click to stop recording"
 
         recordingTimer?.invalidate()
-        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+        // Started together with the recording, so its ticks land on whole seconds.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                self.isRecordingDotVisible.toggle()
-                self.updateRecordingIndicator()
+                self?.updateRecordingIndicator()
             }
         }
         // Common modes keep it ticking while a menu is open.
@@ -74,7 +71,7 @@ final class StatusItemController {
     private func updateRecordingIndicator() {
         let elapsed = screenRecordingService.recordingStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         let text = Self.elapsedText(elapsed)
-        statusItem?.button?.image = Self.recordingIndicatorImage(elapsedText: text, dotVisible: isRecordingDotVisible)
+        statusItem?.button?.image = Self.recordingIndicatorImage(elapsedText: text)
         statusItem?.button?.setAccessibilityLabel("Recording, \(text). Click to stop.")
     }
 
@@ -140,45 +137,26 @@ final class StatusItemController {
             : String(format: "%02d:%02d", minutes, seconds)
     }
 
-    /// A blue pill holding a red dot, drawn or left out to blink, and the elapsed time.
-    /// The dot's space is kept either way so the item does not shift as it blinks.
-    static func recordingIndicatorImage(elapsedText: String, dotVisible: Bool) -> NSImage {
+    /// A red pill with the elapsed time in white.
+    static func recordingIndicatorImage(elapsedText: String) -> NSImage {
         let height: CGFloat = 22
         let pillHeight: CGFloat = 18
-        let dotDiameter: CGFloat = 8
-        let leading: CGFloat = 7
-        let gap: CGFloat = 5
-        let trailing: CGFloat = 8
+        let horizontalPadding: CGFloat = 8
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
             .foregroundColor: NSColor.white
         ]
         let text = elapsedText as NSString
         let textSize = text.size(withAttributes: attributes)
-        let width = (leading + dotDiameter + gap + textSize.width + trailing).rounded(.up)
+        let width = (textSize.width + horizontalPadding * 2).rounded(.up)
 
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
             let pillRect = CGRect(x: 0, y: (height - pillHeight) / 2, width: width, height: pillHeight)
-            NSColor.systemBlue.setFill()
+            NSColor.systemRed.setFill()
             NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2).fill()
 
-            if dotVisible {
-                let dot = NSBezierPath(ovalIn: CGRect(
-                    x: leading,
-                    y: (height - dotDiameter) / 2,
-                    width: dotDiameter,
-                    height: dotDiameter
-                ))
-                NSColor.systemRed.setFill()
-                dot.fill()
-                // Red on blue is hard to separate at this size; a thin rim keeps it crisp.
-                NSColor.white.withAlphaComponent(0.85).setStroke()
-                dot.lineWidth = 1
-                dot.stroke()
-            }
-
             text.draw(
-                at: NSPoint(x: leading + dotDiameter + gap, y: (height - textSize.height) / 2),
+                at: NSPoint(x: (width - textSize.width) / 2, y: (height - textSize.height) / 2),
                 withAttributes: attributes
             )
             return true
