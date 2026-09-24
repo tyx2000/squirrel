@@ -840,6 +840,21 @@ struct SpaceTests {
         CGImageSourceCreateWithData(data as CFData, nil).flatMap { CGImageSourceGetType($0) as String? }
     }
 
+    @Test func recordingIndicatorShowsElapsedTime() async throws {
+        #expect(StatusItemController.elapsedText(7) == "00:07")
+        #expect(StatusItemController.elapsedText(754) == "12:34")
+        #expect(StatusItemController.elapsedText(3723) == "1:02:03")
+        #expect(StatusItemController.elapsedText(-5) == "00:00")
+    }
+
+    @Test func recordingIndicatorKeepsItsSizeWhileBlinking() async throws {
+        // The dot's space is kept when it blinks off, so the menu bar item never shifts.
+        let on = StatusItemController.recordingIndicatorImage(elapsedText: "00:07", dotVisible: true)
+        let off = StatusItemController.recordingIndicatorImage(elapsedText: "00:07", dotVisible: false)
+        #expect(on.size == off.size)
+        #expect(on.isTemplate == false)
+    }
+
     @Test func annotatedCaptureKeepsTheCropsPixelSize() async throws {
         // A 1500 x 1000 pt selection cropped at 2x.
         let base = try #require(Self.solidImage(pixelSize: CGSize(width: 3000, height: 2000)))

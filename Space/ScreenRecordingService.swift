@@ -9,7 +9,16 @@ import ScreenCaptureKit
 
 @MainActor
 final class ScreenRecordingService: ObservableObject {
-    @Published private(set) var isRecording = false
+    @Published private(set) var isRecording = false {
+        didSet {
+            // Every path that starts or ends a recording goes through isRecording, so the
+            // start time is kept here rather than at each of them.
+            if isRecording != oldValue {
+                recordingStartedAt = isRecording ? Date() : nil
+            }
+        }
+    }
+    @Published private(set) var recordingStartedAt: Date?
     @Published private(set) var lastMessage: String?
     @Published private(set) var outputURL: URL?
 
@@ -70,6 +79,12 @@ final class ScreenRecordingService: ObservableObject {
                 fail("Screen recording failed: \(error.localizedDescription)", onFailure: onFailure)
             }
         }
+    }
+
+    /// Stops a recording in progress, for callers other than the hotkey. A failure is
+    /// still reported through lastMessage.
+    func stopActiveRecording() {
+        stopRecording(onFailure: { _ in })
     }
 
     private func stopRecording(onFailure: @escaping (String) -> Void) {
