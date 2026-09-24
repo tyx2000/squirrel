@@ -137,11 +137,14 @@ final class StatusItemController {
             : String(format: "%02d:%02d", minutes, seconds)
     }
 
-    /// A red pill with the elapsed time in white.
-    static func recordingIndicatorImage(elapsedText: String) -> NSImage {
-        let height: CGFloat = 22
-        let pillHeight: CGFloat = 18
-        let horizontalPadding: CGFloat = 8
+    /// A red pill with the elapsed time in white, as tall as a menu bar item can be:
+    /// the status bar's thickness, which is the height of the item's button (22pt here,
+    /// inside a taller menu bar).
+    static func recordingIndicatorImage(
+        elapsedText: String,
+        height: CGFloat = NSStatusBar.system.thickness
+    ) -> NSImage {
+        let horizontalPadding: CGFloat = 20
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
             .foregroundColor: NSColor.white
@@ -151,9 +154,9 @@ final class StatusItemController {
         let width = (textSize.width + horizontalPadding * 2).rounded(.up)
 
         let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { _ in
-            let pillRect = CGRect(x: 0, y: (height - pillHeight) / 2, width: width, height: pillHeight)
+            let pillRect = CGRect(x: 0, y: 0, width: width, height: height)
             NSColor.systemRed.setFill()
-            NSBezierPath(roundedRect: pillRect, xRadius: pillHeight / 2, yRadius: pillHeight / 2).fill()
+            NSBezierPath(roundedRect: pillRect, xRadius: height / 2, yRadius: height / 2).fill()
 
             text.draw(
                 at: NSPoint(x: (width - textSize.width) / 2, y: (height - textSize.height) / 2),

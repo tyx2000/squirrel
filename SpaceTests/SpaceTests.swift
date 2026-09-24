@@ -848,8 +848,15 @@ struct SpaceTests {
     }
 
     @Test func recordingIndicatorIsARedPillWithTheTime() async throws {
-        let image = StatusItemController.recordingIndicatorImage(elapsedText: "00:07")
+        let image = StatusItemController.recordingIndicatorImage(elapsedText: "00:07", height: 22)
         #expect(image.isTemplate == false)
+
+        // As tall as the menu bar item allows, with 20pt either side of the time.
+        #expect(image.size.height == 22)
+        let textWidth = ("00:07" as NSString).size(withAttributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
+        ]).width
+        #expect(image.size.width == (textWidth + 40).rounded(.up))
 
         // Just inside the pill's left end, clear of the text, is its red fill.
         let rep = try #require(image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
