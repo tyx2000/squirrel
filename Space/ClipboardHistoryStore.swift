@@ -85,15 +85,24 @@ final class ClipboardHistoryStore: ObservableObject {
             return
         }
 
-        // History keeps text and images only. A file copy (from Finder, for example)
-        // carries file references alongside the file's name and an image of its icon,
-        // and none of that is kept.
+        let sourceApplicationName = currentSourceApplicationName()
+
+        // Image data first, file links or not: some apps, WeCom for one, copy an image
+        // as the picture itself together with a link to the file it came from.
+        if let imageData = encodedImageDataOnPasteboard() {
+            addImageData(imageData, sourceApplicationName: sourceApplicationName, at: now)
+            return
+        }
+
+        // A file copy (from Finder, for example) carries file links and the file's name
+        // as text but no image data. History keeps text and images only, so it is not
+        // recorded. This comes before the NSImage fallback, which would otherwise read
+        // the linked file itself.
         if let types = pasteboard.types, types.contains(where: Self.fileReferenceTypes.contains) {
             return
         }
 
-        let sourceApplicationName = currentSourceApplicationName()
-        if let imageData = imageDataFromPasteboard() {
+        if let imageData = bitmapImageDataFromPasteboard() {
             addImageData(imageData, sourceApplicationName: sourceApplicationName, at: now)
         } else if let text = pasteboard.string(forType: .string) {
             addText(text, sourceApplicationName: sourceApplicationName, at: now)
@@ -545,11 +554,7 @@ final class ClipboardHistoryStore: ObservableObject {
         return nil
     }
 
-    private func imageDataFromPasteboard() -> Data? {
-        if let data = encodedImageDataOnPasteboard() {
-            return data
-        }
-
+    private func bitmapImageDataFromPasteboard() -> Data? {
         // Fallback: other bitmap formats NSImage reads, such as GIF or BMP, converted to
         // TIFF. Vector content such as a PDF is a document rather than an image and is
         // not kept; it also used to be rasterised here at whatever size its page declared.

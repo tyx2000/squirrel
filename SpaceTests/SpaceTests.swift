@@ -466,23 +466,34 @@ struct SpaceTests {
     }
 
     @Test func copiedFilesAreNotRecorded() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         defer { pasteboard.releaseGlobally() }
-        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)
+        let store = ClipboardHistoryStore(
+            pasteboard: pasteboard,
+            storageURL: directory.appendingPathComponent("clipboard-history.json")
+        )
 
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("space-test-\(UUID().uuidString).txt")
-        try "contents".write(to: fileURL, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: fileURL) }
+        // An image file and a document, each copied the way Finder does it (sampled on
+        // this Mac): a file link, the file's name as text, Finder's node reference, and
+        // no image data at all.
+        let image = try #require(Self.solidImage(pixelSize: CGSize(width: 160, height: 120)))
+        let imageFile = directory.appendingPathComponent("photo.jpg")
+        try #require(Self.encoded(image, as: .jpeg)).write(to: imageFile)
+        let documentFile = directory.appendingPathComponent("book.epub")
+        try Data("book".utf8).write(to: documentFile)
 
-        // Like a Finder copy: the file URL, the file's name as text, and its icon.
-        let icon = try #require(NSWorkspace.shared.icon(forFile: fileURL.path).tiffRepresentation)
-        pasteboard.clearContents()
-        pasteboard.writeObjects([fileURL as NSURL])
-        pasteboard.addTypes([.string, .tiff], owner: nil)
-        pasteboard.setString(fileURL.lastPathComponent, forType: .string)
-        pasteboard.setData(icon, forType: .tiff)
-        store.pollPasteboard()
+        for file in [imageFile, documentFile] {
+            pasteboard.clearContents()
+            pasteboard.writeObjects([file as NSURL])
+            let noderef = NSPasteboard.PasteboardType("com.apple.finder.noderef")
+            pasteboard.addTypes([.string, noderef], owner: nil)
+            pasteboard.setString(file.lastPathComponent, forType: .string)
+            pasteboard.setData(Data([0]), forType: noderef)
+            store.pollPasteboard()
+        }
+        // Neither the file names nor the linked image file itself are recorded.
         #expect(store.items.isEmpty)
 
         // Ordinary text copied afterwards is still recorded.
@@ -490,6 +501,33 @@ struct SpaceTests {
         pasteboard.setString("hello", forType: .string)
         store.pollPasteboard()
         #expect(store.items.map(\.text) == ["hello"])
+    }
+
+    @Test func imageCopiedWithAFileLinkIsKept() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(
+            pasteboard: pasteboard,
+            storageURL: directory.appendingPathComponent("clipboard-history.json")
+        )
+
+        // What WeCom puts on the pasteboard when an image is copied (sampled on this
+        // Mac): a link to its cached file, the picture itself as TIFF, and a private type.
+        let image = try #require(Self.solidImage(pixelSize: CGSize(width: 2054, height: 551)))
+        let cachedFile = directory.appendingPathComponent("cached.png")
+        try #require(Self.encoded(image, as: .png)).write(to: cachedFile)
+        pasteboard.clearContents()
+        pasteboard.writeObjects([cachedFile as NSURL])
+        let weComPrivate = NSPasteboard.PasteboardType("WWKPrivatePBDataReportKey")
+        pasteboard.addTypes([.tiff, weComPrivate], owner: nil)
+        pasteboard.setData(try #require(Self.encoded(image, as: .tiff)), forType: .tiff)
+        pasteboard.setData(Data(count: 42), forType: weComPrivate)
+        store.pollPasteboard()
+
+        #expect(store.items.count == 1)
+        #expect(store.items.first?.isImage == true)
     }
 
     @Test func unreadableHistoryEntryKeepsTheRestAndTheOriginalFile() async throws {
