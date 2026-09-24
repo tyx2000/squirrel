@@ -465,7 +465,7 @@ struct SpaceTests {
         #expect(store.items.map(\.text) == ["hello"])
     }
 
-    @Test func copiedFilesAreRecordedAsPathsNotIconImages() async throws {
+    @Test func copiedFilesAreNotRecorded() async throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
         defer { pasteboard.releaseGlobally() }
         let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)
@@ -475,18 +475,21 @@ struct SpaceTests {
         try "contents".write(to: fileURL, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: fileURL) }
 
-        // Like a Finder copy: the file URL plus an image of its icon.
+        // Like a Finder copy: the file URL, the file's name as text, and its icon.
         let icon = try #require(NSWorkspace.shared.icon(forFile: fileURL.path).tiffRepresentation)
         pasteboard.clearContents()
         pasteboard.writeObjects([fileURL as NSURL])
-        pasteboard.addTypes([.tiff], owner: nil)
+        pasteboard.addTypes([.string, .tiff], owner: nil)
+        pasteboard.setString(fileURL.lastPathComponent, forType: .string)
         pasteboard.setData(icon, forType: .tiff)
         store.pollPasteboard()
+        #expect(store.items.isEmpty)
 
-        let item = try #require(store.items.first)
-        #expect(store.items.count == 1)
-        #expect(item.isImage == false)
-        #expect(URL(fileURLWithPath: item.text).resolvingSymlinksInPath() == fileURL.resolvingSymlinksInPath())
+        // Ordinary text copied afterwards is still recorded.
+        pasteboard.clearContents()
+        pasteboard.setString("hello", forType: .string)
+        store.pollPasteboard()
+        #expect(store.items.map(\.text) == ["hello"])
     }
 
     @Test func unreadableHistoryEntryKeepsTheRestAndTheOriginalFile() async throws {
@@ -609,8 +612,8 @@ struct SpaceTests {
         )
     }
 
-    @Test func vectorPasteboardImageIsMeasuredByTheSizeItRendersAt() async throws {
-        // A 200 x 200 inch page reports no pixels at all; it would render at 14400 x 14400.
+    @Test func pdfOnThePasteboardIsNotRecorded() async throws {
+        // Measured by the size it would render at, not as the single pixel a PDF reports.
         let poster = try #require(NSImage(data: Self.pdfData(side: 200 * 72)))
         #expect(ClipboardHistoryStore.imagePixelCount(for: poster) > ClipboardHistoryStore.maxImagePixelCount)
 
@@ -623,19 +626,35 @@ struct SpaceTests {
             storageURL: directory.appendingPathComponent("clipboard-history.json")
         )
 
-        // Refused before anything is rasterised.
-        pasteboard.declareTypes([.pdf], owner: nil)
-        pasteboard.setData(Self.pdfData(side: 200 * 72), forType: .pdf)
-        store.pollPasteboard()
+        // A PDF is a document, not an image, at any size, and is never rasterised.
+        for side: CGFloat in [200 * 72, 400] {
+            pasteboard.clearContents()
+            pasteboard.declareTypes([.pdf], owner: nil)
+            pasteboard.setData(Self.pdfData(side: side), forType: .pdf)
+            store.pollPasteboard()
+        }
         #expect(store.items.isEmpty)
-        #expect(store.lastError?.contains("16MP") == true)
+    }
 
-        // An ordinary page still comes through.
-        pasteboard.clearContents()
-        pasteboard.declareTypes([.pdf], owner: nil)
-        pasteboard.setData(Self.pdfData(side: 400), forType: .pdf)
+    @Test func otherBitmapFormatsAreStillRecordedAsImages() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(
+            pasteboard: pasteboard,
+            storageURL: directory.appendingPathComponent("clipboard-history.json")
+        )
+
+        // A GIF has no dedicated reader, so it goes through the bitmap fallback.
+        let image = try #require(Self.solidImage(pixelSize: CGSize(width: 120, height: 80)))
+        let gifType = NSPasteboard.PasteboardType(UTType.gif.identifier)
+        pasteboard.declareTypes([gifType], owner: nil)
+        pasteboard.setData(try #require(Self.encoded(image, as: .gif)), forType: gifType)
         store.pollPasteboard()
+
         #expect(store.items.count == 1)
+        #expect(store.items.first?.isImage == true)
     }
 
     @Test func pasteboardImagesPreferCompactRepresentations() async throws {
