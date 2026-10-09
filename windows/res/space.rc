@@ -1,0 +1,59 @@
+// Purpose: Windows resources: the app icon, manifest, version information and the
+// Record Screen dialog.
+
+#include <windows.h>
+#include "resource.h"
+
+#ifndef SPACE_VERSION_STRING
+#define SPACE_VERSION_STRING "1.0.0.0"
+#endif
+#ifndef SPACE_VERSION_COMMAS
+#define SPACE_VERSION_COMMAS 1,0,0,0
+#endif
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+IDI_APP ICON "space.ico"
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "space.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION SPACE_VERSION_COMMAS
+PRODUCTVERSION SPACE_VERSION_COMMAS
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "onmyown"
+            VALUE "FileDescription", "Space"
+            VALUE "FileVersion", SPACE_VERSION_STRING
+            VALUE "InternalName", "Space"
+            VALUE "OriginalFilename", "Space.exe"
+            VALUE "ProductName", "Space"
+            VALUE "ProductVersion", SPACE_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+
+IDD_RECORD DIALOGEX 0, 0, 268, 112
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | DS_FIXEDSYS | WS_POPUP | WS_CAPTION | WS_SYSMENU
+EXSTYLE WS_EX_TOPMOST
+CAPTION "Record Screen"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    LTEXT           "Choose full screen or a window to record. Audio is off by default. The MP4 will be saved to Downloads.", IDC_RECORD_INFO, 10, 8, 248, 20
+    COMBOBOX        IDC_RECORD_TARGET, 10, 34, 248, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    AUTOCHECKBOX    "Record system audio", IDC_RECORD_AUDIO, 10, 56, 248, 12, WS_TABSTOP
+    DEFPUSHBUTTON   "Start Recording", IDOK, 126, 88, 70, 16
+    PUSHBUTTON      "Cancel", IDCANCEL, 202, 88, 56, 16
+END
