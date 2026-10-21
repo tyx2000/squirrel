@@ -1,4 +1,4 @@
-// Purpose: Registers Carbon global hotkeys, persists user shortcuts, and dispatches triggered actions.
+// Purpose: Registers Carbon global hotkeys and trackpad gestures, persists them, and dispatches triggered actions.
 
 import AppKit
 import Carbon
@@ -7,7 +7,9 @@ import Foundation
 
 final class HotKeyManager: ObservableObject {
     @Published private(set) var shortcuts: [HotKeyCommand: HotKeyCombo]
+    @Published private(set) var gestures: [HotKeyCommand: TrackpadGesture]
     @Published private(set) var registrationError: String?
+    @Published private(set) var trackpadError: String?
     @Published private(set) var lastEventMessage: String?
 
     private var refs: [HotKeyCommand: EventHotKeyRef] = [:]
@@ -16,17 +18,29 @@ final class HotKeyManager: ObservableObject {
     private var lastPerformedCommand: HotKeyCommand?
     private var lastPerformedAt = Date.distantPast
     private var eventHandlerRef: EventHandlerRef?
+    private let trackpadMonitor = TrackpadGestureMonitor()
 
     private static weak var activeManager: HotKeyManager?
     private static let signature = OSType(0x5351524C)
     private static let defaultsKey = "Space.Shortcuts"
     private static let legacyDefaultsKey = "Squirrel.Shortcuts"
+    private static let gesturesDefaultsKey = "Space.TrackpadGestures"
     private static let duplicateEventInterval: TimeInterval = 0.18
 
     init() {
         self.shortcuts = Self.loadShortcuts()
+        self.gestures = Self.gestures(from: UserDefaults.standard.data(forKey: Self.gesturesDefaultsKey))
         installEventHandlerIfNeeded()
         registerAll()
+
+        trackpadMonitor.onGesture = { [weak self] gesture in
+            guard let self,
+                  let command = HotKeyCommand.allCases.first(where: { self.gestures[$0] == gesture }) else {
+                return
+            }
+            self.perform(command)
+        }
+        updateTrackpadMonitor()
     }
 
     deinit {
@@ -79,6 +93,44 @@ final class HotKeyManager: ObservableObject {
 
     func shortcut(for command: HotKeyCommand) -> HotKeyCombo {
         shortcuts[command] ?? HotKeyCombo.defaultShortcuts[command]!
+    }
+
+    func gesture(for command: HotKeyCommand) -> TrackpadGesture? {
+        gestures[command]
+    }
+
+    /// Binds `gesture` to `command`, or unbinds it with nil.
+    func updateGesture(_ gesture: TrackpadGesture?, for command: HotKeyCommand) {
+        let previous = gestures[command]
+        let result = Self.assigning(gesture, to: command, in: gestures)
+        gestures = result.gestures
+        if let gesture, let displaced = result.displaced {
+            lastEventMessage = previous.map {
+                "\(gesture.title) was used by \(displaced.fullTitle), which now uses \($0.title)."
+            } ?? "\(gesture.title) was used by \(displaced.fullTitle), which now has no gesture."
+        }
+
+        saveGestures()
+        updateTrackpadMonitor()
+    }
+
+    /// A gesture can only run one command, so one another command holds swaps the same
+    /// way a keyboard shortcut does: that command takes `command`'s previous gesture, or
+    /// none if it had none.
+    static func assigning(
+        _ gesture: TrackpadGesture?,
+        to command: HotKeyCommand,
+        in gestures: [HotKeyCommand: TrackpadGesture]
+    ) -> (gestures: [HotKeyCommand: TrackpadGesture], displaced: HotKeyCommand?) {
+        var updated = gestures
+        var displaced: HotKeyCommand?
+        if let gesture,
+           let conflicting = HotKeyCommand.allCases.first(where: { $0 != command && gestures[$0] == gesture }) {
+            updated[conflicting] = gestures[command]
+            displaced = conflicting
+        }
+        updated[command] = gesture
+        return (updated, displaced)
     }
 
     func suspendHotKeys() {
@@ -197,6 +249,46 @@ final class HotKeyManager: ObservableObject {
     private func saveShortcuts() {
         guard let data = try? JSONEncoder().encode(shortcuts) else { return }
         UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+    }
+
+    /// Reading raw touches has a cost, so the monitor only runs while a gesture is bound.
+    private func updateTrackpadMonitor() {
+        guard !gestures.isEmpty else {
+            trackpadMonitor.stop()
+            trackpadError = nil
+            return
+        }
+
+        trackpadError = trackpadMonitor.start()
+            ? nil
+            : "Trackpad gestures are unavailable: this version of macOS did not provide the Multi-Touch framework."
+    }
+
+    private func saveGestures() {
+        let rawGestures = Dictionary(uniqueKeysWithValues: gestures.map { ($0.key.rawValue, $0.value.rawValue) })
+        guard let data = try? JSONEncoder().encode(rawGestures) else { return }
+        UserDefaults.standard.set(data, forKey: Self.gesturesDefaultsKey)
+    }
+
+    /// Saved by raw value, so a command or gesture a later version drops is skipped
+    /// rather than losing every other binding. No gestures are bound by default: they
+    /// would compete with the trackpad gestures macOS already has.
+    static func gestures(from data: Data?) -> [HotKeyCommand: TrackpadGesture] {
+        guard let data,
+              let rawGestures = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
+        }
+
+        var gestures: [HotKeyCommand: TrackpadGesture] = [:]
+        for command in HotKeyCommand.allCases {
+            guard let rawGesture = rawGestures[command.rawValue],
+                  let gesture = TrackpadGesture(rawValue: rawGesture),
+                  !gestures.values.contains(gesture) else {
+                continue
+            }
+            gestures[command] = gesture
+        }
+        return gestures
     }
 
     private static func loadShortcuts() -> [HotKeyCommand: HotKeyCombo] {

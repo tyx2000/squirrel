@@ -1084,3 +1084,126 @@ struct SpaceTests {
     }
 
 }
+
+@MainActor
+struct TrackpadGestureTests {
+
+    @Test func quickThreeFingerTapIsRecognisedWhenTheFingersLift() async throws {
+        let fingers = [CGPoint(x: 0.4, y: 0.5), CGPoint(x: 0.5, y: 0.52), CGPoint(x: 0.6, y: 0.5)]
+        #expect(recognize(Array(repeating: fingers, count: 10)) == [.threeFingerTap])
+    }
+
+    @Test func slowOrTwoFingerTapsAreNotRecognised() async throws {
+        let fingers = [CGPoint(x: 0.4, y: 0.5), CGPoint(x: 0.5, y: 0.52), CGPoint(x: 0.6, y: 0.5)]
+        #expect(recognize(Array(repeating: fingers, count: 40)).isEmpty)
+        #expect(recognize(Array(repeating: Array(fingers.prefix(2)), count: 10)).isEmpty)
+    }
+
+    @Test func swipeFiresOnceInItsDirection() async throws {
+        let three = [CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.6, y: 0.52), CGPoint(x: 0.7, y: 0.5)]
+        #expect(recognize(slide(three, by: CGVector(dx: -0.35, dy: 0))) == [.threeFingerSwipeLeft])
+
+        let four = three + [CGPoint(x: 0.8, y: 0.48)]
+        #expect(recognize(slide(four, by: CGVector(dx: 0, dy: 0.3))) == [.fourFingerSwipeUp])
+        #expect(recognize(slide(four, by: CGVector(dx: 0, dy: -0.3))) == [.fourFingerSwipeDown])
+    }
+
+    @Test func fingersLandingOneByOneCountAsTheFullSwipe() async throws {
+        let four = [CGPoint(x: 0.3, y: 0.5), CGPoint(x: 0.4, y: 0.52), CGPoint(x: 0.5, y: 0.5), CGPoint(x: 0.6, y: 0.48)]
+        let landing = (1...4).map { Array(four.prefix($0)) }
+        #expect(recognize(landing + slide(four, by: CGVector(dx: 0.3, dy: 0))) == [.fourFingerSwipeRight])
+    }
+
+    @Test func diagonalDragIsNotASwipe() async throws {
+        let three = [CGPoint(x: 0.3, y: 0.3), CGPoint(x: 0.4, y: 0.32), CGPoint(x: 0.5, y: 0.3)]
+        #expect(recognize(slide(three, by: CGVector(dx: 0.25, dy: 0.25))).isEmpty)
+    }
+
+    @Test func swipeInFromAnEdgeNeedsFingersThatLandAtThatEdge() async throws {
+        #expect(recognize(slide([CGPoint(x: 0.01, y: 0.5)], by: CGVector(dx: 0.3, dy: 0))) == [.oneFingerSwipeFromLeftEdge])
+        #expect(recognize(slide([CGPoint(x: 0.5, y: 0.02)], by: CGVector(dx: 0, dy: 0.3))) == [.oneFingerSwipeFromBottomEdge])
+        #expect(recognize(slide([CGPoint(x: 0.5, y: 0.99)], by: CGVector(dx: 0, dy: -0.3))) == [.oneFingerSwipeFromTopEdge])
+
+        let rightEdge = [CGPoint(x: 0.98, y: 0.45), CGPoint(x: 0.97, y: 0.6)]
+        #expect(recognize(slide(rightEdge, by: CGVector(dx: -0.3, dy: 0))) == [.twoFingerSwipeFromRightEdge])
+
+        // Ordinary pointing and scrolling that start away from the edge.
+        #expect(recognize(slide([CGPoint(x: 0.3, y: 0.5)], by: CGVector(dx: 0.3, dy: 0))).isEmpty)
+        #expect(recognize(slide([CGPoint(x: 0.4, y: 0.4), CGPoint(x: 0.5, y: 0.4)], by: CGVector(dx: -0.3, dy: 0))).isEmpty)
+        // Moving outward from an edge is not a swipe in from it.
+        #expect(recognize(slide([CGPoint(x: 0.01, y: 0.5)], by: CGVector(dx: 0, dy: 0.3))).isEmpty)
+    }
+
+    @Test func edgeSwipeIgnoresAPointerThatTurnsInward() async throws {
+        let start = CGPoint(x: 0.02, y: 0.8)
+        let down = slide([start], by: CGVector(dx: 0, dy: -0.3))
+        let corner = try #require(down.last?.first)
+        #expect(recognize(down + slide([corner], by: CGVector(dx: 0.5, dy: 0))).isEmpty)
+    }
+
+    @Test func edgeSwipeIgnoresFingersLeftOverFromALargerGesture() async throws {
+        let three = [CGPoint(x: 0.01, y: 0.3), CGPoint(x: 0.3, y: 0.5), CGPoint(x: 0.4, y: 0.5)]
+        let oneLeft = slide([three[0]], by: CGVector(dx: 0.3, dy: 0))
+        #expect(recognize(Array(repeating: three, count: 40) + oneLeft).isEmpty)
+    }
+
+    @Test func everyGestureIsOfferedInExactlyOneMenuSection() async throws {
+        let offered = TrackpadGesture.groups.flatMap { $0 }
+        #expect(offered.count == TrackpadGesture.allCases.count)
+        #expect(Set(offered) == Set(TrackpadGesture.allCases))
+    }
+
+    @Test func assigningATakenGestureSwapsIt() async throws {
+        let gestures: [HotKeyCommand: TrackpadGesture] = [.lockScreen: .threeFingerTap, .captureArea: .fourFingerTap]
+
+        let swapped = HotKeyManager.assigning(.threeFingerTap, to: .captureArea, in: gestures)
+        #expect(swapped.displaced == .lockScreen)
+        #expect(swapped.gestures == [.captureArea: .threeFingerTap, .lockScreen: .fourFingerTap])
+
+        let moved = HotKeyManager.assigning(.fourFingerTap, to: .recordWindow, in: gestures)
+        #expect(moved.displaced == .captureArea)
+        #expect(moved.gestures == [.lockScreen: .threeFingerTap, .recordWindow: .fourFingerTap])
+
+        let cleared = HotKeyManager.assigning(nil, to: .lockScreen, in: gestures)
+        #expect(cleared.displaced == nil)
+        #expect(cleared.gestures == [.captureArea: .fourFingerTap])
+    }
+
+    @Test func savedGesturesSkipUnknownAndDuplicateEntries() async throws {
+        let saved = try JSONEncoder().encode([
+            HotKeyCommand.lockScreen.rawValue: TrackpadGesture.threeFingerTap.rawValue,
+            HotKeyCommand.recordWindow.rawValue: TrackpadGesture.threeFingerTap.rawValue,
+            HotKeyCommand.captureArea.rawValue: "removedFutureGesture",
+            "removedFutureCommand": TrackpadGesture.fourFingerTap.rawValue
+        ])
+
+        #expect(HotKeyManager.gestures(from: saved) == [.lockScreen: .threeFingerTap])
+        #expect(HotKeyManager.gestures(from: nil).isEmpty)
+    }
+
+    /// Feeds `frames` 10 ms apart, each listing the fingers down, then lifts them all.
+    private func recognize(_ frames: [[CGPoint]]) -> [TrackpadGesture] {
+        var recognizer = TrackpadGestureRecognizer()
+        var gestures: [TrackpadGesture] = []
+        var timestamp: TimeInterval = 100
+        for frame in frames {
+            let touches = frame.enumerated().map { TrackpadTouch(identifier: $0.offset + 1, position: $0.element) }
+            if let gesture = recognizer.process(touches, at: timestamp) {
+                gestures.append(gesture)
+            }
+            timestamp += 0.01
+        }
+        if let gesture = recognizer.process([], at: timestamp) {
+            gestures.append(gesture)
+        }
+        return gestures
+    }
+
+    /// Frames of `fingers` moving together by `offset`.
+    private func slide(_ fingers: [CGPoint], by offset: CGVector, steps: Int = 10) -> [[CGPoint]] {
+        (0...steps).map { step in
+            let progress = CGFloat(step) / CGFloat(steps)
+            return fingers.map { CGPoint(x: $0.x + offset.dx * progress, y: $0.y + offset.dy * progress) }
+        }
+    }
+}

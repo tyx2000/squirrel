@@ -35,6 +35,16 @@ enum HotKeyCommand: String, CaseIterable, Codable, Identifiable {
         }
     }
 
+    /// The title on its own, where the Move Window group label is not beside it.
+    var fullTitle: String {
+        switch self {
+        case .moveLeft: "Move Window Left"
+        case .moveCenter: "Move Window Center"
+        case .moveRight: "Move Window Right"
+        default: title
+        }
+    }
+
     var carbonID: UInt32 {
         switch self {
         case .clipboardWindow: 1

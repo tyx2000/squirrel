@@ -36,6 +36,7 @@ private enum AppTypography {
 private enum MainTab: String, CaseIterable, Identifiable {
     case history
     case shortcuts
+    case gestures
 
     var id: String { rawValue }
 
@@ -43,6 +44,7 @@ private enum MainTab: String, CaseIterable, Identifiable {
         switch self {
         case .history: "Clipboard"
         case .shortcuts: "Shortcuts"
+        case .gestures: "Gestures"
         }
     }
 
@@ -50,6 +52,7 @@ private enum MainTab: String, CaseIterable, Identifiable {
         switch self {
         case .history: "doc.on.clipboard"
         case .shortcuts: "keyboard"
+        case .gestures: "hand.tap"
         }
     }
 }
@@ -313,6 +316,8 @@ struct ContentView: View {
             }
         case .shortcuts:
             shortcutsView
+        case .gestures:
+            gesturesView
         }
     }
 
@@ -379,20 +384,7 @@ struct ContentView: View {
                 Divider()
                     .overlay(AppPalette.separator)
 
-                HStack(spacing: 10) {
-                    Label(
-                        windowManager.isAccessibilityTrusted ? "Accessibility Access Granted" : "Window management requires Accessibility access",
-                        systemImage: windowManager.isAccessibilityTrusted ? "checkmark.circle" : "lock"
-                    )
-                    .foregroundStyle(windowManager.isAccessibilityTrusted ? .green : AppPalette.secondaryText)
-                    Spacer(minLength: 12)
-                    Button("Open Settings") {
-                        windowManager.requestAccessibilityPermission()
-                    }
-                    Button("Check") {
-                        windowManager.refreshPermissionStatus()
-                    }
-                }
+                accessibilityStatusRow
 
                 HStack(spacing: 10) {
                     Toggle(isOn: Binding(
@@ -478,6 +470,80 @@ struct ContentView: View {
         }
     }
 
+    private var accessibilityStatusRow: some View {
+        HStack(spacing: 10) {
+            Label(
+                windowManager.isAccessibilityTrusted ? "Accessibility Access Granted" : "Window management requires Accessibility access",
+                systemImage: windowManager.isAccessibilityTrusted ? "checkmark.circle" : "lock"
+            )
+            .foregroundStyle(windowManager.isAccessibilityTrusted ? .green : AppPalette.secondaryText)
+            Spacer(minLength: 12)
+            Button("Open Settings") {
+                windowManager.requestAccessibilityPermission()
+            }
+            Button("Check") {
+                windowManager.refreshPermissionStatus()
+            }
+        }
+    }
+
+    private var gesturesView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 10) {
+                    Text("If macOS uses the same gesture, turn it off in Trackpad Settings so both don't run.")
+                        .font(AppTypography.secondary)
+                        .foregroundStyle(AppPalette.secondaryText)
+                    Spacer(minLength: 12)
+                    Button("Trackpad Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.Trackpad-Settings.extension") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
+
+                Divider()
+                    .overlay(AppPalette.separator)
+
+                ForEach(HotKeyCommand.standaloneCommands + HotKeyCommand.moveCommands) { command in
+                    TrackpadGesturePickerRow(
+                        title: command.fullTitle,
+                        gesture: Binding(
+                            get: { hotKeyManager.gesture(for: command) },
+                            set: { hotKeyManager.updateGesture($0, for: command) }
+                        )
+                    )
+                    .padding(.vertical, 1)
+                }
+
+                Divider()
+                    .overlay(AppPalette.separator)
+
+                // Most gestures drive window actions, which do nothing without this.
+                accessibilityStatusRow
+
+                if let trackpadError = hotKeyManager.trackpadError {
+                    Label(trackpadError, systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+
+                if let hotKeyMessage = hotKeyManager.lastEventMessage {
+                    Label(hotKeyMessage, systemImage: "hand.tap")
+                        .foregroundStyle(.orange)
+                }
+
+                if let message = windowManager.lastMessage {
+                    Text(message)
+                        .font(AppTypography.secondary)
+                        .foregroundStyle(AppPalette.secondaryText)
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
     private func emptyState(title: String, subtitle: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "tray")
@@ -492,6 +558,30 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+}
+
+private struct TrackpadGesturePickerRow: View {
+    let title: String
+    @Binding var gesture: TrackpadGesture?
+
+    var body: some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Picker("", selection: $gesture) {
+                Text("None").tag(TrackpadGesture?.none)
+                ForEach(TrackpadGesture.groups, id: \.self) { group in
+                    Divider()
+                    ForEach(group) { gesture in
+                        Text(gesture.title).tag(TrackpadGesture?.some(gesture))
+                    }
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 260)
+        }
+    }
 }
 
 private struct ShortcutRecorderGroupView: View {
