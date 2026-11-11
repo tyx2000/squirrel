@@ -11,7 +11,9 @@ import UniformTypeIdentifiers
 @MainActor
 final class ClipboardHistoryStore: ObservableObject {
     @Published private(set) var items: [ClipboardItem] = []
-    @Published private(set) var lastError: String?
+    @Published private(set) var lastError: String? {
+        didSet { lastErrorIsSaveFailure = false }
+    }
 
     private let pasteboard: NSPasteboard
     private let storageURL: URL?
@@ -20,6 +22,9 @@ final class ClipboardHistoryStore: ObservableObject {
     private let retentionInterval: TimeInterval
     private var timer: Timer?
     private var lastChangeCount: Int
+    /// Whether lastError reports a failed save, the one error a later successful save
+    /// settles. Any other notice stays until it is dismissed or replaced.
+    private var lastErrorIsSaveFailure = false
     private static let maxTextByteCount = 100_000
     private static let maxImageDataByteCount = 50_000_000
     static let maxImagePixelCount = 16_000_000
@@ -104,6 +109,10 @@ final class ClipboardHistoryStore: ObservableObject {
 
         if let imageData = bitmapImageDataFromPasteboard() {
             addImageData(imageData, sourceApplicationName: sourceApplicationName, at: now)
+        } else if let byteCount = pasteboard.data(forType: .string)?.count, byteCount > Self.maxTextByteCount {
+            // The raw UTF-8 says enough to refuse it. Reading it as a String and trimming it
+            // first held several copies of a copied log file only to throw them away.
+            lastError = "Clipboard text too large (max 100KB)"
         } else if let text = pasteboard.string(forType: .string) {
             addText(text, sourceApplicationName: sourceApplicationName, at: now)
         } else {
@@ -195,6 +204,7 @@ final class ClipboardHistoryStore: ObservableObject {
         pruneHistory(now: date)
         save()
         compactStoredImageIfNeeded(itemID: id, fileName: fileName, imageData: imageData)
+        MemoryRelief.releaseFreedMemory()
         return true
     }
 
@@ -239,6 +249,7 @@ final class ClipboardHistoryStore: ObservableObject {
         items[index].imageFileName = compactFileName
         save()
         try? FileManager.default.removeItem(at: imageDirectoryURL.appendingPathComponent(originalFileName))
+        MemoryRelief.releaseFreedMemory()
     }
 
     nonisolated private static func pngData(fromImageAt url: URL) -> Data? {
@@ -322,8 +333,15 @@ final class ClipboardHistoryStore: ObservableObject {
         let now = Date()
 
         if promotedItem.isImage {
+            // Ordering and retention go by createdAt, as they do for text, so a promoted
+            // image keeps its place at the top after a relaunch.
+            promotedItem.createdAt = now
             promotedItem.updatedAt = now
-            if let promotedImageData = imageData(for: promotedItem) {
+            // The stored fingerprint identifies duplicates without reading the file back;
+            // only an entry from before fingerprints were kept needs its data.
+            if let fingerprint = promotedItem.imageFingerprint {
+                removeImageItems(withFingerprint: fingerprint)
+            } else if let promotedImageData = imageData(for: promotedItem) {
                 removeImageItemsMatching(promotedImageData)
             }
             items.insert(promotedItem, at: 0)
@@ -423,9 +441,12 @@ final class ClipboardHistoryStore: ObservableObject {
             )
             let data = try JSONEncoder().encode(items)
             try data.write(to: storageURL, options: .atomic)
-            lastError = nil
+            if lastErrorIsSaveFailure {
+                lastError = nil
+            }
         } catch {
             lastError = "Failed to save clipboard history: \(error.localizedDescription)"
+            lastErrorIsSaveFailure = true
             os_log("Failed to save clipboard history: %{public}@", log: .default, type: .error, error.localizedDescription)
         }
     }
@@ -469,6 +490,15 @@ final class ClipboardHistoryStore: ObservableObject {
             os_log("Failed to store clipboard image: %{public}@", log: .default, type: .error, error.localizedDescription)
             return nil
         }
+    }
+
+    private func removeImageItems(withFingerprint fingerprint: String) {
+        let duplicates = items.filter { $0.isImage && $0.imageFingerprint == fingerprint }
+        guard !duplicates.isEmpty else { return }
+
+        let duplicateIDs = Set(duplicates.map(\.id))
+        items.removeAll { duplicateIDs.contains($0.id) }
+        deleteImageFiles(for: duplicates)
     }
 
     private func removeImageItemsMatching(_ imageData: Data, knownFingerprint: String? = nil) {

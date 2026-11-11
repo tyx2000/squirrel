@@ -746,7 +746,7 @@ private struct ClipboardImagePreview: View {
         image = thumbnail
     }
 
-    private static func downsampledImage(url: URL?, data: Data?, backingScale: CGFloat) -> NSImage? {
+    nonisolated private static func downsampledImage(url: URL?, data: Data?, backingScale: CGFloat) -> NSImage? {
         autoreleasepool {
             let source: CGImageSource?
             if let url {
@@ -784,7 +784,7 @@ private struct ClipboardImagePreview: View {
 /// Decode only as many pixels as a clipboard preview can show. A fixed 1800px cap on
 /// the long side decoded a tall screenshot at about fifteen times the pixels its 230pt
 /// frame displays.
-enum ClipboardThumbnail {
+nonisolated enum ClipboardThumbnail {
     /// The largest area a preview occupies: the card's content width beside its action
     /// buttons, and the preview's 230pt height cap.
     static let displayBox = CGSize(width: 940, height: 230)

@@ -100,41 +100,10 @@ final class AppServices: ObservableObject {
         }
     }
 
+    /// The system's own Lock Screen shortcut. The CGSession tool this used to try first
+    /// is gone from current macOS.
     private nonisolated static func performLockScreenRequest() -> Bool {
-        if launchCGSessionLock() {
-            return true
-        }
-
-        return postSystemLockShortcut()
-    }
-
-    private nonisolated static func launchCGSessionLock() -> Bool {
-        let candidatePaths = [
-            "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession",
-            "/System/Library/CoreServices/CGSession"
-        ]
-
-        guard let executablePath = candidatePaths.first(where: FileManager.default.isExecutableFile(atPath:)) else {
-            return false
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = ["-suspend"]
-        do {
-            try process.run()
-            let deadline = Date().addingTimeInterval(1.5)
-            while process.isRunning && Date() < deadline {
-                Thread.sleep(forTimeInterval: 0.02)
-            }
-            if process.isRunning {
-                process.terminate()
-                return false
-            }
-            return process.terminationStatus == 0
-        } catch {
-            return false
-        }
+        postSystemLockShortcut()
     }
 
     private nonisolated static func postSystemLockShortcut() -> Bool {

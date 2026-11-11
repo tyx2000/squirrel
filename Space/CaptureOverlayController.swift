@@ -2,14 +2,15 @@
 
 import AppKit
 import Foundation
+import QuartzCore
 
-enum CaptureAnnotationTool: Equatable {
+nonisolated enum CaptureAnnotationTool: Equatable, Sendable {
     case rectangle
     case line
     case arrow
 }
 
-struct CaptureAnnotation {
+nonisolated struct CaptureAnnotation: Sendable {
     var tool: CaptureAnnotationTool
     var start: CGPoint
     var end: CGPoint
@@ -17,9 +18,9 @@ struct CaptureAnnotation {
 
 struct CaptureScreenSnapshot {
     var displayID: CGDirectDisplayID
+    /// The frozen screen at full pixel resolution. The overlay shows it and the output is
+    /// cropped from it, so this is the only copy of the screen the capture holds.
     var image: CGImage
-    /// Full-resolution image retained only until the crop is complete, then nil'd to free memory.
-    var fullResImage: CGImage?
     var pointSize: CGSize
 }
 
@@ -351,7 +352,18 @@ final class CaptureOverlayView: NSView {
 
     private let captureScreen: NSScreen
     private let snapshot: CaptureScreenSnapshot
-    private let snapshotImage: NSImage
+    // The frozen screen is the view's layer contents, shown as is without a backing store;
+    // drawing it in draw(_:) gave the full-screen view a backing store of its own, which
+    // reached hundreds of megabytes on a 5K display. What changes while selecting lives in
+    // shape layers, and the few drawn pieces in views only as large as they are.
+    private let dimLayer = CAShapeLayer()
+    private let annotationLayer = CAShapeLayer()
+    private let borderLayer = CAShapeLayer()
+    private let handlesLayer = CAShapeLayer()
+    private let sizeLabelView = CaptureChromeView()
+    private let toolbarView = CaptureChromeView()
+    private let colorReadoutView = CaptureChromeView()
+    private let toolbarShadowOutset: CGFloat = 14
     private let onComplete: (CaptureOutputAction, NSScreen, CaptureScreenSnapshot, CGRect, [CaptureAnnotation]) -> Void
     private let onCancel: () -> Void
     private var dragStart: CGPoint?
@@ -402,11 +414,58 @@ final class CaptureOverlayView: NSView {
     ) {
         self.captureScreen = screen
         self.snapshot = snapshot
-        self.snapshotImage = NSImage(cgImage: snapshot.image, size: snapshot.pointSize)
         self.onComplete = onComplete
         self.onCancel = onCancel
         super.init(frame: NSRect(origin: .zero, size: screen.frame.size))
         wantsLayer = true
+        layerContentsRedrawPolicy = .never
+
+        for shapeLayer in [dimLayer, annotationLayer, borderLayer, handlesLayer] {
+            shapeLayer.frame = bounds
+            shapeLayer.actions = ["path": NSNull(), "position": NSNull(), "bounds": NSNull()]
+        }
+        dimLayer.fillRule = .evenOdd
+        annotationLayer.fillColor = nil
+        annotationLayer.lineWidth = 3
+        borderLayer.fillColor = nil
+        borderLayer.lineWidth = 2
+        handlesLayer.lineWidth = 1
+
+        sizeLabelView.drawer = { [unowned self] in self.drawSizeLabel() }
+        toolbarView.drawer = { [unowned self] in self.drawToolbar() }
+        colorReadoutView.drawer = { [unowned self] in self.drawColorReadout() }
+        for chromeView in [sizeLabelView, toolbarView, colorReadoutView] {
+            chromeView.isHidden = true
+            addSubview(chromeView)
+        }
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        guard let layer else { return }
+        layer.contents = snapshot.image
+        layer.contentsGravity = .resize
+        if dimLayer.superlayer == nil {
+            // Below the chrome views' own layers, in drawing order.
+            for shapeLayer in [handlesLayer, borderLayer, annotationLayer, dimLayer] {
+                layer.insertSublayer(shapeLayer, at: 0)
+            }
+        }
+        // Dynamic colours resolve against the view's appearance here.
+        dimLayer.fillColor = NSColor.black.withAlphaComponent(0.26).cgColor
+        annotationLayer.strokeColor = annotationColor.cgColor
+        borderLayer.strokeColor = NSColor.controlAccentColor.cgColor
+        handlesLayer.fillColor = NSColor.windowBackgroundColor.withAlphaComponent(0.96).cgColor
+        handlesLayer.strokeColor = NSColor.controlAccentColor.cgColor
+        refreshChrome()
+    }
+
+    override func layout() {
+        super.layout()
+        for shapeLayer in [dimLayer, annotationLayer, borderLayer, handlesLayer] {
+            shapeLayer.frame = bounds
+        }
     }
 
     @available(*, unavailable)
@@ -427,7 +486,7 @@ final class CaptureOverlayView: NSView {
 
         if let toolbarButton = toolbarButtons.first(where: { $0.rect.contains(point) }) {
             pressedToolbarAction = toolbarButton.action
-            needsDisplay = true
+            refreshChrome()
             return
         }
 
@@ -459,7 +518,7 @@ final class CaptureOverlayView: NSView {
             dragCurrent = point
         }
 
-        needsDisplay = true
+        refreshChrome()
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -481,7 +540,7 @@ final class CaptureOverlayView: NSView {
             dragCurrent = point
         }
         updateColorSample(at: point)
-        needsDisplay = true
+        refreshChrome()
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -493,7 +552,7 @@ final class CaptureOverlayView: NSView {
                 handle(pressedToolbarAction)
             }
             updateCursor(at: point)
-            needsDisplay = true
+            refreshChrome()
             return
         }
 
@@ -506,7 +565,7 @@ final class CaptureOverlayView: NSView {
             self.annotationStart = nil
             annotationCurrent = nil
             updateCursor(at: point)
-            needsDisplay = true
+            refreshChrome()
             return
         }
 
@@ -516,7 +575,7 @@ final class CaptureOverlayView: NSView {
             resizeOriginalRect = nil
             resizeOriginalAnnotations.removeAll()
             updateCursor(at: point)
-            needsDisplay = true
+            refreshChrome()
             return
         }
 
@@ -526,7 +585,7 @@ final class CaptureOverlayView: NSView {
             moveOriginalRect = nil
             moveOriginalAnnotations.removeAll()
             updateCursor(at: point)
-            needsDisplay = true
+            refreshChrome()
             return
         }
 
@@ -534,7 +593,7 @@ final class CaptureOverlayView: NSView {
         guard let draftSelectionRect, draftSelectionRect.width >= minimumSelectionSize, draftSelectionRect.height >= minimumSelectionSize else {
             dragStart = nil
             dragCurrent = nil
-            needsDisplay = true
+            refreshChrome()
             return
         }
 
@@ -543,7 +602,7 @@ final class CaptureOverlayView: NSView {
         dragCurrent = nil
         activeTool = nil
         updateCursor(at: point)
-        needsDisplay = true
+        refreshChrome()
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -559,9 +618,8 @@ final class CaptureOverlayView: NSView {
         defer { isShiftDown = isShiftDownNow }
         guard isShiftDownNow, !isShiftDown else { return }
 
-        let previousRect = colorReadoutRect()
         colorFormat.toggle()
-        invalidateColorReadout(previousRect)
+        refreshColorReadout()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -593,9 +651,8 @@ final class CaptureOverlayView: NSView {
     private func showCopyConfirmation(for text: String) {
         copyConfirmationWorkItem?.cancel()
 
-        let previousRect = colorReadoutRect()
         copyConfirmationText = text
-        invalidateColorReadout(previousRect)
+        refreshColorReadout()
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -610,43 +667,61 @@ final class CaptureOverlayView: NSView {
 
         copyConfirmationWorkItem?.cancel()
         copyConfirmationWorkItem = nil
-        let previousRect = colorReadoutRect()
         copyConfirmationText = nil
-        invalidateColorReadout(previousRect)
+        refreshColorReadout()
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        drawFrozenSnapshot()
+    /// Brings the layers and chrome views in line with the selection state. Everything it
+    /// touches is either a path or a view the size of what it shows, so it is cheap to
+    /// call on every mouse event.
+    private func refreshChrome() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
 
         let selectedRect = selectionRect ?? draftSelectionRect
+        let dimPath = CGMutablePath()
+        dimPath.addRect(bounds)
         if let selectedRect {
-            drawDimmedBackground(around: selectedRect, exposingToolbar: selectionRect != nil)
-            drawSelectionBorder(selectedRect)
-            drawAnnotations()
-            if let activeTool, let annotation = currentAnnotation(tool: activeTool) {
-                draw(annotation)
-            }
-            drawSizeLabel(for: selectedRect)
+            dimPath.addRect(selectedRect)
             if selectionRect != nil {
-                drawResizeHandles(for: selectedRect)
-                drawToolbar()
+                dimPath.addPath(CGPath(
+                    roundedRect: toolbarRect.insetBy(dx: -2, dy: -2),
+                    cornerWidth: 9,
+                    cornerHeight: 9,
+                    transform: nil
+                ))
             }
-        } else {
-            NSColor.black.withAlphaComponent(0.26).setFill()
-            bounds.fill()
         }
+        dimLayer.path = dimPath
+        borderLayer.path = selectedRect.map { CGPath(rect: $0, transform: nil) }
+        annotationLayer.path = selectedRect == nil ? nil : annotationsPath()
+        handlesLayer.path = selectionRect.map(resizeHandlesPath(for:))
 
-        drawColorReadout()
+        place(sizeLabelView, in: selectedRect.map(sizeLabelRect(for:)))
+        place(
+            toolbarView,
+            in: selectionRect == nil ? nil : toolbarRect.insetBy(dx: -toolbarShadowOutset, dy: -toolbarShadowOutset)
+        )
+        refreshColorReadout()
     }
 
-    private func drawFrozenSnapshot() {
-        snapshotImage.draw(
-            in: bounds,
-            from: CGRect(origin: .zero, size: snapshot.pointSize),
-            operation: .sourceOver,
-            fraction: 1
-        )
+    private func refreshColorReadout() {
+        let rect = colorReadoutRect()
+        place(colorReadoutView, in: rect.isEmpty ? nil : rect)
+    }
+
+    private func place(_ view: CaptureChromeView, in rect: CGRect?) {
+        guard let rect, !rect.isEmpty else {
+            view.isHidden = true
+            return
+        }
+        let frame = rect.integral
+        if view.frame != frame {
+            view.frame = frame
+        }
+        view.isHidden = false
+        view.needsDisplay = true
     }
 
     private var draftSelectionRect: CGRect? {
@@ -748,7 +823,7 @@ final class CaptureOverlayView: NSView {
         case .cancel:
             closeCapture()
         }
-        needsDisplay = true
+        refreshChrome()
     }
 
     private func closeCapture() {
@@ -756,7 +831,7 @@ final class CaptureOverlayView: NSView {
         dragStart = nil
         dragCurrent = nil
         clearSelectionState()
-        needsDisplay = true
+        refreshChrome()
         onCancel()
     }
 
@@ -871,33 +946,12 @@ final class CaptureOverlayView: NSView {
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
-    private func drawDimmedBackground(around rect: CGRect, exposingToolbar: Bool) {
-        let dimPath = NSBezierPath(rect: bounds)
-        dimPath.append(NSBezierPath(rect: rect))
-        if exposingToolbar {
-            dimPath.append(NSBezierPath(roundedRect: toolbarRect.insetBy(dx: -2, dy: -2), xRadius: 9, yRadius: 9))
-        }
-        dimPath.windingRule = .evenOdd
-        NSColor.black.withAlphaComponent(0.26).setFill()
-        dimPath.fill()
-    }
-
-    private func drawSelectionBorder(_ rect: CGRect) {
-        NSColor.controlAccentColor.setStroke()
-        let border = NSBezierPath(rect: rect)
-        border.lineWidth = 2
-        border.stroke()
-    }
-
-    private func drawResizeHandles(for rect: CGRect) {
+    private func resizeHandlesPath(for rect: CGRect) -> CGPath {
+        let path = CGMutablePath()
         for handleRect in resizeHandleRects(for: rect).map(\.rect) {
-            NSColor.windowBackgroundColor.withAlphaComponent(0.96).setFill()
-            NSBezierPath(roundedRect: handleRect, xRadius: 1, yRadius: 1).fill()
-            NSColor.controlAccentColor.setStroke()
-            let border = NSBezierPath(roundedRect: handleRect, xRadius: 1, yRadius: 1)
-            border.lineWidth = 1
-            border.stroke()
+            path.addPath(CGPath(roundedRect: handleRect, cornerWidth: 1, cornerHeight: 1, transform: nil))
         }
+        return path
     }
 
     private func resizeHandle(at point: CGPoint, in rect: CGRect) -> CaptureResizeHandle? {
@@ -954,56 +1008,43 @@ final class CaptureOverlayView: NSView {
         return NSCursor(image: image, hotSpot: NSPoint(x: 9, y: 9))
     }
 
-    private func drawAnnotations() {
-        for annotation in annotations {
-            draw(annotation)
+    private func annotationsPath() -> CGPath {
+        let path = CGMutablePath()
+        var shown = annotations
+        if let activeTool, let annotation = currentAnnotation(tool: activeTool) {
+            shown.append(annotation)
         }
+        for annotation in shown {
+            switch annotation.tool {
+            case .rectangle:
+                path.addRect(rect(from: annotation.start, to: annotation.end))
+            case .line:
+                path.move(to: annotation.start)
+                path.addLine(to: annotation.end)
+            case .arrow:
+                addArrow(to: path, from: annotation.start, to: annotation.end)
+            }
+        }
+        return path
     }
 
-    private func draw(_ annotation: CaptureAnnotation) {
-        annotationColor.setStroke()
-        switch annotation.tool {
-        case .rectangle:
-            let path = NSBezierPath(rect: rect(from: annotation.start, to: annotation.end))
-            path.lineWidth = 3
-            path.stroke()
-        case .line:
-            let path = NSBezierPath()
-            path.move(to: annotation.start)
-            path.line(to: annotation.end)
-            path.lineWidth = 3
-            path.stroke()
-        case .arrow:
-            drawArrow(from: annotation.start, to: annotation.end)
-        }
-    }
-
-    private func drawArrow(from start: CGPoint, to end: CGPoint) {
-        let path = NSBezierPath()
+    private func addArrow(to path: CGMutablePath, from start: CGPoint, to end: CGPoint) {
         path.move(to: start)
-        path.line(to: end)
-        path.lineWidth = 3
-        path.stroke()
+        path.addLine(to: end)
 
         let angle = atan2(end.y - start.y, end.x - start.x)
         let headLength: CGFloat = 13
         let headAngle: CGFloat = .pi / 7
-        let left = CGPoint(
+        path.move(to: end)
+        path.addLine(to: CGPoint(
             x: end.x - headLength * cos(angle - headAngle),
             y: end.y - headLength * sin(angle - headAngle)
-        )
-        let right = CGPoint(
+        ))
+        path.move(to: end)
+        path.addLine(to: CGPoint(
             x: end.x - headLength * cos(angle + headAngle),
             y: end.y - headLength * sin(angle + headAngle)
-        )
-
-        let head = NSBezierPath()
-        head.move(to: end)
-        head.line(to: left)
-        head.move(to: end)
-        head.line(to: right)
-        head.lineWidth = 3
-        head.stroke()
+        ))
     }
 
     private func drawToolbar() {
@@ -1047,8 +1088,6 @@ final class CaptureOverlayView: NSView {
             clearCopyConfirmation()
         }
 
-        let previousRect = colorReadoutRect()
-
         // The toolbar sits above the frozen image, so there is no meaningful colour there.
         if selectionRect != nil, toolbarRect.contains(point) {
             colorSampleLocation = nil
@@ -1058,7 +1097,7 @@ final class CaptureOverlayView: NSView {
             sampledColor = color(atViewPoint: point)
         }
 
-        invalidateColorReadout(previousRect)
+        refreshColorReadout()
     }
 
     private func colorConfirmationShouldClear(for point: CGPoint) -> Bool {
@@ -1067,20 +1106,9 @@ final class CaptureOverlayView: NSView {
         return colorSampleLocation != point
     }
 
-    private func invalidateColorReadout(_ previousRect: CGRect) {
-        let updatedRect = colorReadoutRect()
-        guard !previousRect.isEmpty || !updatedRect.isEmpty else { return }
-
-        // A full-screen redraw per mouse move is wasteful; only the pill moved.
-        let dirtyRect = previousRect.isEmpty
-            ? updatedRect
-            : (updatedRect.isEmpty ? previousRect : previousRect.union(updatedRect))
-        setNeedsDisplay(dirtyRect.insetBy(dx: -2, dy: -2))
-    }
-
     private func color(atViewPoint point: CGPoint) -> CaptureSampledColor? {
         CaptureColorSampler.color(
-            in: snapshot.fullResImage ?? snapshot.image,
+            in: snapshot.image,
             atViewPoint: point,
             snapshotPointSize: snapshot.pointSize
         )
@@ -1147,25 +1175,35 @@ final class CaptureOverlayView: NSView {
         )
     }
 
-    private func drawSizeLabel(for rect: CGRect) {
-        let text = "\(Int(rect.width)) × \(Int(rect.height))"
-        let attributes: [NSAttributedString.Key: Any] = [
+    private var sizeLabelAttributes: [NSAttributedString.Key: Any] {
+        [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium),
             .foregroundColor: NSColor.white
         ]
-        let textSize = text.size(withAttributes: attributes)
-        let labelRect = CGRect(
+    }
+
+    private func sizeLabelText(for rect: CGRect) -> String {
+        "\(Int(rect.width)) × \(Int(rect.height))"
+    }
+
+    private func sizeLabelRect(for rect: CGRect) -> CGRect {
+        let textSize = sizeLabelText(for: rect).size(withAttributes: sizeLabelAttributes)
+        return CGRect(
             x: rect.minX,
             y: max(rect.minY - textSize.height - 10, 8),
             width: textSize.width + 14,
             height: textSize.height + 8
         )
+    }
 
+    private func drawSizeLabel() {
+        guard let rect = selectionRect ?? draftSelectionRect else { return }
+        let labelRect = sizeLabelRect(for: rect)
         NSColor.black.withAlphaComponent(0.62).setFill()
         NSBezierPath(roundedRect: labelRect, xRadius: 5, yRadius: 5).fill()
-        text.draw(
+        sizeLabelText(for: rect).draw(
             in: labelRect.insetBy(dx: 7, dy: 4),
-            withAttributes: attributes
+            withAttributes: sizeLabelAttributes
         )
     }
 
@@ -1202,5 +1240,22 @@ final class CaptureOverlayView: NSView {
 private extension CGPoint {
     func offsetBy(dx: CGFloat, dy: CGFloat) -> CGPoint {
         CGPoint(x: x + dx, y: y + dy)
+    }
+}
+
+/// A view as small as one piece of the overlay's chrome. Its drawer draws in the overlay's
+/// coordinates, so it is shifted here, and it never takes the overlay's mouse events.
+private final class CaptureChromeView: NSView {
+    var drawer: (() -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        let transform = NSAffineTransform()
+        transform.translateX(by: -frame.minX, yBy: -frame.minY)
+        transform.concat()
+        drawer?()
+        NSGraphicsContext.restoreGraphicsState()
     }
 }

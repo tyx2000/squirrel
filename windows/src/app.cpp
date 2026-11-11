@@ -235,6 +235,15 @@ LRESULT App::HandleMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         case WM_CLIPBOARDUPDATE:
             if (clipboard_) clipboard_->HandleClipboardUpdate();
             return 0;
+        case WM_RENDERFORMAT:
+            if (clipboard_) clipboard_->HandleRenderFormat(static_cast<UINT>(wParam));
+            return 0;
+        case WM_RENDERALLFORMATS:
+            if (clipboard_) clipboard_->HandleRenderAllFormats();
+            return 0;
+        case WM_DESTROYCLIPBOARD:
+            if (clipboard_) clipboard_->HandleDestroyClipboard();
+            return 0;
         case WM_TIMER:
             HandleTimer(wParam);
             return 0;

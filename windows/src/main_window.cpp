@@ -239,6 +239,9 @@ bool MainWindow::Hide() {
     pressed_ = {};
     UpdateTooltip(std::nullopt);
     ShowWindow(hwnd_, SW_HIDE);
+    // The render target and the decoded previews are rebuilt on the next show; kept, they
+    // would hold the panel's surface and up to 24 bitmaps for as long as it stays hidden.
+    DiscardDeviceResources();
     return true;
 }
 
@@ -1169,7 +1172,13 @@ void MainWindow::RequestThumbnail(const ClipboardItem& item, const D2D1_RECT_F& 
 
 void MainWindow::ThumbnailReady(LPARAM payload) {
     std::unique_ptr<ThumbnailLoader::Result> result(reinterpret_cast<ThumbnailLoader::Result*>(payload));
-    if (!result || !app_.Clipboard().Find(result->id)) return;
+    if (!result) return;
+    // A preview that arrives after the panel was hidden would recreate what Hide released.
+    if (!IsVisible()) {
+        thumbnailRequested_.erase(result->id);
+        return;
+    }
+    if (!app_.Clipboard().Find(result->id)) return;
     if (!result->bitmap || !EnsureTarget()) return;
 
     ComPtr<ID2D1Bitmap> bitmap;

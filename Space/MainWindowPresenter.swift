@@ -1,4 +1,5 @@
 // Purpose: Creates, presents, animates, and releases the clipboard management window on demand.
+// The window is built when first opened and released a while after it is hidden.
 
 import AppKit
 import Foundation
@@ -14,6 +15,10 @@ final class MainWindowPresenter {
     private var shouldShowWhenAvailable = false
     private var isSuppressingWindowPresentation = false
     private let animationDuration: TimeInterval = 0.16
+    /// A hidden panel still holds its SwiftUI view tree and image previews. Once it has
+    /// been out of sight this long it is released, and built again on the next open.
+    private let releaseDelay: TimeInterval = 20
+    private var pendingRelease: DispatchWorkItem?
     private let windowSize = NSSize(width: 1080, height: 720)
 
     private init() {
@@ -53,6 +58,7 @@ final class MainWindowPresenter {
         }
 
         guard !isSuppressingWindowPresentation else { return }
+        cancelPendingRelease()
         guard let window = window ?? makeWindow() else {
             shouldShowWhenAvailable = true
             return
@@ -163,7 +169,32 @@ final class MainWindowPresenter {
         shouldShowWhenAvailable = false
         NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
         window.orderOut(nil)
+        scheduleRelease()
         return true
+    }
+
+    /// Also called when the panel is closed rather than hidden.
+    func scheduleRelease() {
+        cancelPendingRelease()
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.releaseWindowIfHidden()
+        }
+        pendingRelease = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + releaseDelay, execute: workItem)
+    }
+
+    private func cancelPendingRelease() {
+        pendingRelease?.cancel()
+        pendingRelease = nil
+    }
+
+    private func releaseWindowIfHidden() {
+        pendingRelease = nil
+        guard let window, !window.isVisible, !window.isMiniaturized else { return }
+        window.contentViewController = nil
+        window.delegate = nil
+        self.window = nil
+        MemoryRelief.releaseFreedMemory()
     }
 
     private func makeWindow() -> NSWindow? {
@@ -277,6 +308,10 @@ private final class MainWindowDelegate: NSObject, NSWindowDelegate {
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         NotificationCenter.default.post(name: .cancelShortcutRecording, object: nil)
         return true
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        MainWindowPresenter.shared.scheduleRelease()
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {

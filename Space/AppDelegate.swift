@@ -6,6 +6,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var services: AppServices?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Unit tests run inside the app. Starting the services there would watch the real
+        // pasteboard, write the user's history, and take the global shortcuts.
+        guard !Self.isHostingUnitTests() else { return }
+
         // Menu bar resident: the status item is the entry point, so no Dock icon
         // and no Cmd-Tab entry.
         NSApp.setActivationPolicy(.accessory)
@@ -24,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             openClipboardWindow()
         }
         services?.loginItemService.promptIfNeeded()
+    }
+
+    static func isHostingUnitTests(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        ["XCTestConfigurationFilePath", "XCTestBundlePath", "XCTestSessionIdentifier"]
+            .contains { environment[$0] != nil }
     }
 
     private static let hasLaunchedKey = "Space.hasPresentedAtFirstLaunch"

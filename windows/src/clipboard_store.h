@@ -53,7 +53,16 @@ public:
     void Promote(const std::wstring& id);
 
     bool SetClipboardText(const std::wstring& text);
+    // Puts the PNG or JPEG on the clipboard as is and offers a bitmap (CF_DIB) by delayed
+    // rendering: up to 64MB of pixels are made only if an app asks for them, instead of
+    // staying in this process for as long as the image is on the clipboard.
     bool SetClipboardImage(const std::vector<uint8_t>& encoded);
+
+    // The message window forwards WM_RENDERFORMAT, WM_RENDERALLFORMATS and
+    // WM_DESTROYCLIPBOARD here.
+    void HandleRenderFormat(UINT format);
+    void HandleRenderAllFormats();
+    void HandleDestroyClipboard();
 
     void PruneHistory(double now);
 
@@ -66,7 +75,9 @@ private:
     };
 
     void ReadOpenClipboard();
-    std::optional<ClipboardImage> EncodedImageOnOpenClipboard() const;
+    // Data over kMaxImageBytes is not copied; `tooLarge` says when that is why there is none.
+    std::optional<ClipboardImage> EncodedImageOnOpenClipboard(bool* tooLarge = nullptr) const;
+    bool RenderPendingDib();
     bool HasPrivacyMarkerOnOpenClipboard() const;
     std::wstring SourceApplicationName() const;
     bool AddDib(const std::vector<uint8_t>& dib, const std::wstring& source, double now);
@@ -90,6 +101,7 @@ private:
     size_t maxItemCount_;
     double retentionSeconds_;
     DWORD lastSequence_ = 0;
+    std::vector<uint8_t> pendingImage_;  // encoded image whose CF_DIB is not yet rendered
     int retryCount_ = 0;
 
     UINT pngFormat_ = 0;

@@ -630,6 +630,138 @@ struct SpaceTests {
         #expect(small >= 400 * 200)
     }
 
+    @Test func plainCaptureIsEncodedWithTheCropsExactPixels() async throws {
+        // Laid out the way ScreenCaptureKit delivers a frame: 8-bit BGRA in Display P3.
+        let space = try #require(CGColorSpace(name: CGColorSpace.displayP3))
+        let context = try #require(CGContext(
+            data: nil,
+            width: 300,
+            height: 200,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: space,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ))
+        for x in 0..<300 {
+            context.setFillColor(CGColor(colorSpace: space, components: [CGFloat(x) / 299, CGFloat(x % 7) / 6, 0.4, 1])!)
+            context.fill(CGRect(x: x, y: 0, width: 1, height: 200))
+        }
+        let source = try #require(context.makeImage())
+        #expect(ScreenCaptureService.canEncodeDirectly(source))
+
+        let png = try #require(ScreenCaptureService.encodedCapture(
+            from: source,
+            annotations: [],
+            selectionRect: CGRect(x: 0, y: 0, width: 150, height: 100),
+            maxPixelCount: ClipboardHistoryStore.maxImagePixelCount
+        ))
+        let decoded = try #require(CGImageSourceCreateWithData(png as CFData, nil).flatMap {
+            CGImageSourceCreateImageAtIndex($0, 0, nil)
+        })
+
+        #expect(decoded.width == 300)
+        #expect(decoded.height == 200)
+        #expect(Self.pixels(of: decoded, in: space) == Self.pixels(of: source, in: space))
+    }
+
+    @Test func annotatedOrOversizedCaptureIsStillRendered() async throws {
+        let base = try #require(Self.solidImage(pixelSize: CGSize(width: 400, height: 300)))
+        let annotations = [CaptureAnnotation(tool: .line, start: CGPoint(x: 10, y: 10), end: CGPoint(x: 100, y: 100))]
+        let annotated = try #require(ScreenCaptureService.encodedCapture(
+            from: base,
+            annotations: annotations,
+            selectionRect: CGRect(x: 0, y: 0, width: 200, height: 150),
+            maxPixelCount: nil
+        ))
+        let scaled = try #require(ScreenCaptureService.encodedCapture(
+            from: base,
+            annotations: [],
+            selectionRect: CGRect(x: 0, y: 0, width: 200, height: 150),
+            maxPixelCount: 30_000
+        ))
+
+        let annotatedImage = try #require(CGImageSourceCreateWithData(annotated as CFData, nil).flatMap {
+            CGImageSourceCreateImageAtIndex($0, 0, nil)
+        })
+        let scaledImage = try #require(CGImageSourceCreateWithData(scaled as CFData, nil).flatMap {
+            CGImageSourceCreateImageAtIndex($0, 0, nil)
+        })
+        #expect(annotatedImage.width == 400)
+        #expect(scaledImage.width * scaledImage.height <= 30_000)
+    }
+
+    @Test func promotedImageMovesToTheTopForGood() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storageURL = directory.appendingPathComponent("clipboard-history.json")
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let imageData = try #require(Self.testImageData())
+
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: storageURL)
+        #expect(store.addImageData(imageData, at: Date().addingTimeInterval(-60)))
+        store.addText("newer text", at: Date().addingTimeInterval(-30))
+        let image = try #require(store.items.first { $0.isImage })
+
+        store.promoteItem(image)
+
+        #expect(store.items.first?.id == image.id)
+        #expect(store.items.filter(\.isImage).count == 1)
+        // Ordering is by createdAt on load, so the promotion survives a relaunch.
+        let reloaded = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: storageURL)
+        #expect(reloaded.items.first?.id == image.id)
+    }
+
+    @Test func oversizedPasteboardTextIsRefusedWithoutRecordingIt() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: nil)
+
+        pasteboard.clearContents()
+        pasteboard.setString(String(repeating: "x", count: 100_001), forType: .string)
+        store.pollPasteboard()
+
+        #expect(store.items.isEmpty)
+        #expect(store.lastError == "Clipboard text too large (max 100KB)")
+    }
+
+    @Test func aSuccessfulSaveKeepsANoticeThatIsNotAboutSaving() async throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storageURL = directory.appendingPathComponent("clipboard-history.json")
+        try Data("not json".utf8).write(to: storageURL)
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(UUID().uuidString))
+        defer { pasteboard.releaseGlobally() }
+
+        let store = ClipboardHistoryStore(pasteboard: pasteboard, storageURL: storageURL)
+        let notice = try #require(store.lastError)
+        store.addText("saved fine", at: Date())
+
+        #expect(store.lastError == notice)
+    }
+
+    @Test func servicesStayOffWhileHostingUnitTests() async throws {
+        #expect(AppDelegate.isHostingUnitTests(environment: ["XCTestConfigurationFilePath": "/tmp/x"]))
+        #expect(!AppDelegate.isHostingUnitTests(environment: [:]))
+    }
+
+    private static func pixels(of image: CGImage, in space: CGColorSpace) -> [UInt8] {
+        var bytes = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        bytes.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: image.width,
+                height: image.height,
+                bitsPerComponent: 8,
+                bytesPerRow: image.width * 4,
+                space: space,
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { return }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        }
+        return bytes
+    }
+
     private static func unreadableBackup(in directory: URL) -> URL? {
         (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil))?
             .first { $0.lastPathComponent.hasPrefix("clipboard-history.unreadable-") }
@@ -784,7 +916,6 @@ struct SpaceTests {
                 unknownDisplay: CaptureScreenSnapshot(
                     displayID: unknownDisplay,
                     image: image,
-                    fullResImage: image,
                     pointSize: CGSize(width: 32, height: 32)
                 )
             ],

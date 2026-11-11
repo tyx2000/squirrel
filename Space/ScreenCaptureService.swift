@@ -4,7 +4,9 @@ import AppKit
 import Combine
 import CoreGraphics
 import Foundation
+import ImageIO
 import ScreenCaptureKit
+import UniformTypeIdentifiers
 
 @MainActor
 final class ScreenCaptureService: ObservableObject {
@@ -95,6 +97,7 @@ final class ScreenCaptureService: ObservableObject {
             onCancel: { [weak self] in
                 self?.overlayController = nil
                 MainWindowPresenter.shared.endCapturePresentation()
+                MemoryRelief.releaseFreedMemory()
             }
         )
         overlayController = controller
@@ -146,7 +149,7 @@ final class ScreenCaptureService: ObservableObject {
         annotations: [CaptureAnnotation],
         onFailure: @escaping (String) -> Void
     ) {
-        let cropSource = snapshot.fullResImage ?? snapshot.image
+        let cropSource = snapshot.image
 
         // A copied screenshot goes to the pasteboard and to history, and history refuses
         // anything over its pixel cap, so size it to fit rather than let the two disagree.
@@ -162,37 +165,98 @@ final class ScreenCaptureService: ObservableObject {
             from: cropSource,
             snapshotPointSize: snapshot.pointSize,
             selectionRect: localSelectionRect
-        ), let outputImage = Self.renderedCapture(
-            from: region,
-            annotations: annotations,
-            selectionRect: localSelectionRect,
-            maxPixelCount: maxPixelCount
         ) else {
             fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
             return
         }
 
         if action == .pin {
+            guard let outputImage = Self.renderedCapture(
+                from: region,
+                annotations: annotations,
+                selectionRect: localSelectionRect,
+                maxPixelCount: maxPixelCount
+            ) else {
+                fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
+                return
+            }
             let result = pinnedImageController.pin(image: outputImage, screen: screen, selectionRect: localSelectionRect)
             if result.didEvict {
                 lastMessage = "Pinned images capped at 5 — oldest pin removed (\(result.count) remaining)."
             } else {
                 lastMessage = nil
             }
+            MemoryRelief.releaseFreedMemory()
             return
         }
 
-        guard let pngData = Self.pngData(from: outputImage) else {
-            fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
-            return
-        }
+        // Encoding a full 5K screen takes a few hundred milliseconds, so it runs off the
+        // main thread. The region keeps the snapshot alive until it is done.
+        Task { @MainActor in
+            let pngData = await Task.detached(priority: .userInitiated) {
+                Self.encodedCapture(
+                    from: region,
+                    annotations: annotations,
+                    selectionRect: localSelectionRect,
+                    maxPixelCount: maxPixelCount
+                )
+            }.value
 
-        clipboardStore.setPasteboardImageData(pngData)
-        if clipboardStore.addImageData(pngData, sourceApplicationName: "Screenshot") {
-            lastMessage = nil
-        } else {
-            lastMessage = clipboardStore.lastError ?? "Screenshot was not saved to history."
+            guard let pngData else {
+                fail("Capture Area could not create the screenshot image.", onFailure: onFailure)
+                return
+            }
+
+            clipboardStore.setPasteboardImageData(pngData)
+            if clipboardStore.addImageData(pngData, sourceApplicationName: "Screenshot") {
+                lastMessage = nil
+            } else {
+                lastMessage = clipboardStore.lastError ?? "Screenshot was not saved to history."
+            }
+            MemoryRelief.releaseFreedMemory()
         }
+    }
+
+    /// The PNG for a copied capture. A plain capture that needs no scaling is encoded
+    /// straight from the crop: the same pixels, without the full-size intermediate copy
+    /// that drawing it again would make. Annotations or scaling go through
+    /// renderedCapture. Only 8-bit RGB is encoded as is, so a deeper or extended-range
+    /// capture still comes out as the 8-bit image it always did.
+    nonisolated static func encodedCapture(
+        from region: CGImage,
+        annotations: [CaptureAnnotation],
+        selectionRect: CGRect,
+        maxPixelCount: Int?
+    ) -> Data? {
+        autoreleasepool {
+            let outputSize = fittedPixelSize(width: region.width, height: region.height, maxPixelCount: maxPixelCount)
+            let needsRendering = !annotations.isEmpty
+                || outputSize.width != region.width
+                || outputSize.height != region.height
+                || !canEncodeDirectly(region)
+
+            if needsRendering {
+                guard let rendered = renderedCapture(
+                    from: region,
+                    annotations: annotations,
+                    selectionRect: selectionRect,
+                    maxPixelCount: maxPixelCount
+                ) else {
+                    return nil
+                }
+                return pngData(from: rendered)
+            }
+            return pngData(from: region)
+        }
+    }
+
+    nonisolated static func canEncodeDirectly(_ image: CGImage) -> Bool {
+        guard image.bitsPerComponent == 8,
+              let colorSpace = image.colorSpace,
+              colorSpace.model == .rgb else {
+            return false
+        }
+        return !CGColorSpaceUsesExtendedRange(colorSpace)
     }
 
     private static func captureSnapshots(for screens: [NSScreen]) async throws -> [CGDirectDisplayID: CaptureScreenSnapshot] {
@@ -208,11 +272,10 @@ final class ScreenCaptureService: ObservableObject {
                 screen: screen,
                 displayID: displayID
             )
-            let fullResImage = try await captureImage(in: captureRect)
+            let image = try await captureImage(in: captureRect)
             snapshotsByDisplayID[displayID] = CaptureScreenSnapshot(
                 displayID: displayID,
-                image: fullResImage,
-                fullResImage: fullResImage,
+                image: image,
                 pointSize: screen.frame.size
             )
         }
@@ -230,7 +293,7 @@ final class ScreenCaptureService: ObservableObject {
         )
     }
 
-    static func pixelCropRect(
+    nonisolated static func pixelCropRect(
         for selectionRect: CGRect,
         snapshotPointSize: CGSize,
         snapshotPixelSize: CGSize
@@ -247,7 +310,7 @@ final class ScreenCaptureService: ObservableObject {
 
     /// The selected region of the snapshot. `cropping(to:)` shares the full-screen
     /// snapshot's storage; renderedCapture copies it out so the snapshot can be freed.
-    private static func croppedRegion(from source: CGImage, snapshotPointSize: CGSize, selectionRect: CGRect) -> CGImage? {
+    nonisolated private static func croppedRegion(from source: CGImage, snapshotPointSize: CGSize, selectionRect: CGRect) -> CGImage? {
         let cropRect = pixelCropRect(
             for: selectionRect,
             snapshotPointSize: snapshotPointSize,
@@ -290,7 +353,7 @@ final class ScreenCaptureService: ObservableObject {
     /// Everything is drawn in the region's own pixel coordinates. When `maxPixelCount`
     /// is set and the region exceeds it, the context is scaled down so image and
     /// annotations shrink together.
-    static func renderedCapture(
+    nonisolated static func renderedCapture(
         from region: CGImage,
         annotations: [CaptureAnnotation],
         selectionRect: CGRect,
@@ -342,7 +405,7 @@ final class ScreenCaptureService: ObservableObject {
     }
 
     /// The largest size with the same aspect ratio that fits within `maxPixelCount`.
-    static func fittedPixelSize(width: Int, height: Int, maxPixelCount: Int?) -> (width: Int, height: Int) {
+    nonisolated static func fittedPixelSize(width: Int, height: Int, maxPixelCount: Int?) -> (width: Int, height: Int) {
         guard let maxPixelCount, maxPixelCount > 0, width * height > maxPixelCount else {
             return (width, height)
         }
@@ -359,7 +422,7 @@ final class ScreenCaptureService: ObservableObject {
     /// wide-gamut display stays Display P3 instead of being clipped to sRGB; an 8-bit
     /// context cannot hold an extended-range space, and those fall back to sRGB rather
     /// than failing and losing the annotations.
-    private static func makeOpaqueContext(width: Int, height: Int, preferring preferred: CGColorSpace?) -> CGContext? {
+    nonisolated private static func makeOpaqueContext(width: Int, height: Int, preferring preferred: CGColorSpace?) -> CGContext? {
         var candidates: [CGColorSpace] = []
         if let preferred, preferred.model == .rgb {
             candidates.append(preferred)
@@ -384,7 +447,7 @@ final class ScreenCaptureService: ObservableObject {
         return nil
     }
 
-    private static func draw(
+    nonisolated private static func draw(
         _ annotation: CaptureAnnotation,
         selectionRect: CGRect,
         scaleX: CGFloat,
@@ -414,7 +477,7 @@ final class ScreenCaptureService: ObservableObject {
         }
     }
 
-    private static func drawArrow(from start: CGPoint, to end: CGPoint, scale: CGFloat) {
+    nonisolated private static func drawArrow(from start: CGPoint, to end: CGPoint, scale: CGFloat) {
         let lineWidth = 3 * scale
         let path = NSBezierPath()
         path.move(to: start)
@@ -443,7 +506,7 @@ final class ScreenCaptureService: ObservableObject {
         head.stroke()
     }
 
-    private static func imagePoint(
+    nonisolated private static func imagePoint(
         _ point: CGPoint,
         selectionRect: CGRect,
         scaleX: CGFloat,
@@ -455,10 +518,19 @@ final class ScreenCaptureService: ObservableObject {
         )
     }
 
-    private static func pngData(from image: CGImage) -> Data? {
+    nonisolated private static func pngData(from image: CGImage) -> Data? {
         autoreleasepool {
-            let bitmap = NSBitmapImageRep(cgImage: image)
-            return bitmap.representation(using: .png, properties: [:])
+            let data = NSMutableData()
+            guard let destination = CGImageDestinationCreateWithData(
+                data,
+                UTType.png.identifier as CFString,
+                1,
+                nil
+            ) else {
+                return nil
+            }
+            CGImageDestinationAddImage(destination, image, nil)
+            return CGImageDestinationFinalize(destination) ? data as Data : nil
         }
     }
 }

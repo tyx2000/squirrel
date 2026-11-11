@@ -18,10 +18,16 @@ namespace {
 constexpr int kMaxClipboardRetries = 10;
 constexpr UINT kRetryDelayMs = 40;
 
-std::optional<std::vector<uint8_t>> GlobalBytes(UINT format) {
+// Copies a clipboard format's data, or nothing, setting *tooLarge, when it is larger than
+// `maxBytes`: a rejected copy would only be thrown away.
+std::optional<std::vector<uint8_t>> GlobalBytes(UINT format, size_t maxBytes = SIZE_MAX, bool* tooLarge = nullptr) {
     HANDLE handle = GetClipboardData(format);
     if (!handle) return std::nullopt;
     SIZE_T size = GlobalSize(handle);
+    if (size > maxBytes) {
+        if (tooLarge) *tooLarge = true;
+        return std::nullopt;
+    }
     const void* data = GlobalLock(handle);
     if (!data) return std::nullopt;
     std::vector<uint8_t> bytes(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
@@ -29,14 +35,22 @@ std::optional<std::vector<uint8_t>> GlobalBytes(UINT format) {
     return bytes;
 }
 
-std::optional<std::wstring> ClipboardText() {
+// The clipboard's text, or nothing, setting *tooLarge, when it runs past `maxLength`
+// UTF-16 units. Only that much is scanned and nothing is copied for longer text.
+std::optional<std::wstring> ClipboardText(size_t maxLength = SIZE_MAX, bool* tooLarge = nullptr) {
     HANDLE handle = GetClipboardData(CF_UNICODETEXT);
     if (!handle) return std::nullopt;
     const auto* data = static_cast<const wchar_t*>(GlobalLock(handle));
     if (!data) return std::nullopt;
-    size_t maxLength = GlobalSize(handle) / sizeof(wchar_t);
+    size_t available = GlobalSize(handle) / sizeof(wchar_t);
+    size_t scanLimit = maxLength == SIZE_MAX ? available : std::min(available, maxLength + 1);
     size_t length = 0;
-    while (length < maxLength && data[length] != L'\0') ++length;
+    while (length < scanLimit && data[length] != L'\0') ++length;
+    if (length > maxLength) {
+        GlobalUnlock(handle);
+        if (tooLarge) *tooLarge = true;
+        return std::nullopt;
+    }
     std::wstring text(data, length);
     GlobalUnlock(handle);
     return text;
@@ -158,15 +172,15 @@ bool ClipboardStore::HasPrivacyMarkerOnOpenClipboard() const {
     return false;
 }
 
-std::optional<ClipboardStore::ClipboardImage> ClipboardStore::EncodedImageOnOpenClipboard() const {
+std::optional<ClipboardStore::ClipboardImage> ClipboardStore::EncodedImageOnOpenClipboard(bool* tooLarge) const {
     for (UINT format : {pngFormat_, jfifFormat_}) {
         if (!IsClipboardFormatAvailable(format)) continue;
-        auto bytes = GlobalBytes(format);
+        auto bytes = GlobalBytes(format, kMaxImageBytes, tooLarge);
         if (bytes && !bytes->empty()) return ClipboardImage{std::move(*bytes), false};
     }
     for (UINT format : {static_cast<UINT>(CF_DIBV5), static_cast<UINT>(CF_DIB)}) {
         if (!IsClipboardFormatAvailable(format)) continue;
-        auto bytes = GlobalBytes(format);
+        auto bytes = GlobalBytes(format, kMaxImageBytes, tooLarge);
         if (bytes && bytes->size() > sizeof(BITMAPINFOHEADER)) return ClipboardImage{std::move(*bytes), true};
     }
     return std::nullopt;
@@ -182,19 +196,23 @@ void ClipboardStore::ReadOpenClipboard() {
     // picture, whatever else it adds.
     for (UINT format : {pngFormat_, jfifFormat_}) {
         if (!IsClipboardFormatAvailable(format)) continue;
-        auto bytes = GlobalBytes(format);
-        if (!bytes || bytes->empty()) continue;
-        if (bytes->size() > kMaxImageBytes) {
+        bool tooLarge = false;
+        auto bytes = GlobalBytes(format, kMaxImageBytes, &tooLarge);
+        if (tooLarge) {
             lastError_ = L"Image too large (max 50MB)";
             Changed();
             return;
         }
+        if (!bytes || bytes->empty()) continue;
         AddImage(*bytes, imaging::Sha256Hex(bytes->data(), bytes->size()), source, now);
         return;
     }
 
-    auto text = IsClipboardFormatAvailable(CF_UNICODETEXT) ? ClipboardText() : std::nullopt;
-    bool hasText = text && !IsBlank(*text);
+    // More UTF-16 units than the byte limit is always over it, since every unit takes at
+    // least one byte in UTF-8.
+    bool textTooLarge = false;
+    auto text = IsClipboardFormatAvailable(CF_UNICODETEXT) ? ClipboardText(kMaxTextBytes, &textTooLarge) : std::nullopt;
+    bool hasText = textTooLarge || (text && !IsBlank(*text));
     bool hasBitmap = IsClipboardFormatAvailable(CF_DIBV5) || IsClipboardFormatAvailable(CF_DIB);
 
     // Office copies a picture of the text or cells along with the text itself; that
@@ -202,8 +220,14 @@ void ClipboardStore::ReadOpenClipboard() {
     // file-link check because some apps (WeCom for one) copy an image together with a
     // link to the file it came from.
     if (hasBitmap && !hasText) {
-        auto image = EncodedImageOnOpenClipboard();
-        if (image && image->isDib) AddDib(image->bytes, source, now);
+        bool tooLarge = false;
+        auto image = EncodedImageOnOpenClipboard(&tooLarge);
+        if (tooLarge) {
+            lastError_ = L"Image too large (max 50MB)";
+            Changed();
+        } else if (image && image->isDib) {
+            AddDib(image->bytes, source, now);
+        }
         return;
     }
 
@@ -211,7 +235,10 @@ void ClipboardStore::ReadOpenClipboard() {
     // keeps text and images only, so it is not recorded.
     if (IsClipboardFormatAvailable(CF_HDROP)) return;
 
-    if (text) {
+    if (textTooLarge) {
+        lastError_ = L"Clipboard text too large (max 100KB)";
+        Changed();
+    } else if (text) {
         AddText(*text, source, now);
     } else {
         PruneHistory(now);
@@ -370,6 +397,9 @@ void ClipboardStore::Promote(const std::wstring& id) {
     double now = UnixNow();
 
     if (promoted.IsImage()) {
+        // Ordering and retention go by createdAt, as they do for text, so a promoted
+        // image keeps its place at the top after a restart.
+        promoted.createdAt = now;
         promoted.updatedAt = now;
         if (!promoted.imageFingerprint.empty()) RemoveImageItemsMatching(promoted.imageFingerprint, nullptr);
         items_.insert(items_.begin(), std::move(promoted));
@@ -397,23 +427,51 @@ bool ClipboardStore::SetClipboardText(const std::wstring& text) {
 }
 
 bool ClipboardStore::SetClipboardImage(const std::vector<uint8_t>& encoded) {
-    auto bitmap = imaging::DecodeMemory(encoded.data(), encoded.size());
     if (!OpenClipboardWithRetry(window_)) return false;
+    // Ends any earlier delayed rendering of ours, through WM_DESTROYCLIPBOARD.
     EmptyClipboard();
 
     // The encoded data as it is, for apps that read PNG or JPEG, and a DIB for the many
-    // that only read bitmaps.
+    // that only read bitmaps, made when one of them asks.
     UINT encodedFormat = imaging::DetectFormat(encoded.data(), encoded.size()) == imaging::EncodedFormat::Jpeg
         ? jfifFormat_
         : pngFormat_;
     bool ok = SetGlobalData(encodedFormat, encoded.data(), encoded.size());
-    if (bitmap) {
-        auto dib = imaging::MakeDib(*bitmap);
-        ok = SetGlobalData(CF_DIB, dib.data(), dib.size()) || ok;
-    }
+    pendingImage_ = encoded;
+    SetClipboardData(CF_DIB, nullptr);
     CloseClipboard();
     lastSequence_ = GetClipboardSequenceNumber();
     return ok;
+}
+
+bool ClipboardStore::RenderPendingDib() {
+    if (pendingImage_.empty()) return false;
+    std::vector<uint8_t> encoded = std::move(pendingImage_);
+    pendingImage_.clear();
+    auto bitmap = imaging::DecodeMemory(encoded.data(), encoded.size());
+    if (!bitmap) return false;
+    auto dib = imaging::MakeDib(*bitmap);
+    return SetGlobalData(CF_DIB, dib.data(), dib.size());
+}
+
+void ClipboardStore::HandleRenderFormat(UINT format) {
+    // The clipboard is already open by the app asking; only SetClipboardData is allowed.
+    if (format != CF_DIB) return;
+    RenderPendingDib();
+    lastSequence_ = GetClipboardSequenceNumber();
+}
+
+void ClipboardStore::HandleRenderAllFormats() {
+    // Quitting: render what is still promised, or apps lose the bitmap once this window is gone.
+    if (pendingImage_.empty() || !OpenClipboard(window_)) return;
+    if (GetClipboardOwner() == window_) RenderPendingDib();
+    CloseClipboard();
+    lastSequence_ = GetClipboardSequenceNumber();
+}
+
+void ClipboardStore::HandleDestroyClipboard() {
+    pendingImage_.clear();
+    pendingImage_.shrink_to_fit();
 }
 
 void ClipboardStore::PruneHistory(double now) {
